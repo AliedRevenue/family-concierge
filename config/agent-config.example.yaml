@@ -1,0 +1,112 @@
+/**
+ * Sample Agent Configuration (YAML)
+ * This is a reference config after discovery has been run and user has approved
+ */
+
+version: "1.0.0"
+createdAt: "2025-12-27T00:00:00.000Z"
+updatedAt: "2025-12-27T00:00:00.000Z"
+
+# Enabled packs with user-approved configuration
+packs:
+  - packId: school
+    priority: 80
+    config:
+      sources:
+        - name: "Elementary School"
+          type: email
+          fromDomains:
+            - "exampleschool.edu"
+            - "parentsquare.com"
+          keywords:
+            - "Colin"
+            - "Henry"
+            - "3rd Grade"
+            - "5th Grade"
+          label: "School/Primary"
+          enabled: true
+
+        - name: "District Communications"
+          type: email
+          fromDomains:
+            - "schooldistrict.k12.ca.us"
+          requiredKeywords:
+            - "calendar"
+          label: "School/District"
+          enabled: true
+
+      extractionHints:
+        preferIcsOverText: true
+        defaultDuration: 60
+        fallbackTime: "09:00"
+        requireExplicitTime: false
+
+      eventDefaults:
+        durationMinutes: 60
+        reminderMinutes: [1440, 60] # 1 day and 1 hour before
+        color: "10" # Green
+
+      forwarding:
+        enabled: true
+        forwardTo:
+          - parent1@email.com
+          - parent2@email.com
+        conditions:
+          # Forward emails that don't have events but match keywords
+          - type: no_event_found
+            excludePatterns:
+              - "fundraiser"
+              - "donation request"
+              - "pto meeting"
+          
+          # Always forward important notices
+          - type: keyword_match
+            value:
+              - "grade report"
+              - "progress report"
+              - "behavior notice"
+              - "nurse"
+              - "medication"
+        
+        includeOriginal: true
+        subjectPrefix: "[School Info] "
+
+# Calendar configuration
+calendar:
+  calendarId: primary
+  timezone: America/Los_Angeles
+
+# Invite policy
+invites:
+  defaultGuests:
+    - parent1@email.com
+    - parent2@email.com
+  policy: conditional
+  conditionalRules:
+    - condition: keyword
+      value: "conference"
+      guests:
+        - parent1@email.com
+        - parent2@email.com
+    - condition: keyword
+      value: "volunteer"
+      guests:
+        - parent1@email.com
+
+# Confidence thresholds
+confidence:
+  autoCreate: 0.85
+  autoUpdate: 0.90
+  requireReviewBelow: 0.85
+
+# Global defaults
+defaults:
+  eventDurationMinutes: 60
+  fallbackTime: "09:00"
+  createIfTimeUnknown: false
+
+# Processing configuration
+processing:
+  maxEmailsPerRun: 50
+  lookbackDays: 14
+  deduplicationWindowDays: 14

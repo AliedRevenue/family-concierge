@@ -1,0 +1,177 @@
+# Family Ops - Fitzgerald Family Configuration
+version: "1.0.0"
+createdAt: "2025-12-28T00:00:00.000Z"
+updatedAt: "2025-12-28T00:00:00.000Z"
+
+# Enabled packs
+packs:
+  - packId: school
+    priority: 80
+    config:
+      sources:
+        - name: "Waterford School"
+          type: email
+          fromDomains:
+            - "waterfordschool.org"
+            - "*waterford*.org"
+            - "*waterford*.com"
+            - "mail1.veracross.com"
+            - "mail2.veracross.com"
+            - "mail3.veracross.com"
+            - "*veracross.com"
+          keywords:
+            - "Colin"
+            - "Henry"
+            - "Fitzgerald"
+            - "Colin Fitzgerald"
+            - "Henry Fitzgerald"
+            - "early release"
+            - "early dismissal"
+            - "parent conference"
+            - "field trip"
+            - "assembly"
+            - "picture day"
+            - "school event"
+            - "class"
+            - "grade"
+          enabled: true
+
+      extractionHints:
+        preferIcsOverText: true
+        defaultDuration: 60
+        fallbackTime: "09:00"
+        requireExplicitTime: false
+
+      eventDefaults:
+        durationMinutes: 60
+        reminderMinutes: [60]
+        color: "10"
+
+      forwarding:
+        enabled: true
+        forwardTo: 
+          - "Wendy_tui@yahoo.com"
+        conditions:
+          - type: "noEventFound"
+            description: "Forward if no event could be extracted"
+
+  - packId: activities
+    priority: 70
+    config:
+      sources:
+        - name: "Kids Activities"
+          type: email
+          fromDomains: []  # Will match any sender
+          keywords:
+            - "Colin"
+            - "Henry"
+            - "swim"
+            - "swimming"
+            - "piano"
+            - "lesson"
+            - "class"
+            - "practice"
+            - "recital"
+            - "performance"
+          enabled: true
+
+      extractionHints:
+        preferIcsOverText: true
+        defaultDuration: 60
+        fallbackTime: "09:00"
+        requireExplicitTime: false
+
+      eventDefaults:
+        durationMinutes: 60
+        reminderMinutes: [60]
+        color: "7"
+
+      forwarding:
+        enabled: true
+        forwardTo:
+          - "Wendy_tui@yahoo.com"
+        conditions:
+          - type: "noEventFound"
+
+# Calendar configuration
+calendar:
+  calendarId: primary
+  timezone: America/Los_Angeles
+# Family members and assignment rules
+family:
+  members:
+    - name: "Emma"
+      aliases:
+        - "Emma"
+        - "E."
+        - "Emma Fitzgerald"
+      groupAliases:
+        - "Emma's class"
+        - "Emma's team"
+    - name: "James"
+      aliases:
+        - "James"
+        - "J."
+        - "James Fitzgerald"
+      groupAliases:
+        - "James's class"
+        - "James's team"
+    - name: "Colin"
+      aliases:
+        - "Colin"
+        - "C."
+        - "Colin Fitzgerald"
+      groupAliases:
+        - "Colin's class"
+        - "Colin's team"
+    - name: "Henry"
+      aliases:
+        - "Henry"
+        - "H."
+        - "Henry Fitzgerald"
+      groupAliases:
+        - "Henry's class"
+        - "Henry's team"
+  defaultAssignmentFallback: "Family/Shared" # Use for items that don't match any family member
+# Invite policy
+invites:
+  defaultGuests: []
+  policy: manual
+
+# Confidence thresholds
+confidence:
+  autoCreate: 0.85
+  autoUpdate: 0.90
+  requireReviewBelow: 0.85
+
+# Global defaults
+defaults:
+  eventDurationMinutes: 60
+  fallbackTime: "09:00"
+  createIfTimeUnknown: false
+
+# Processing configuration
+processing:
+  maxEmailsPerRun: 50
+  lookbackDays: 14
+  deduplicationWindowDays: 14
+
+# Notifications (REQUIRED for Phase 2)
+notifications:
+  email: "ian.lp.fitzgerald@gmail.com"
+  sendOnError: true
+  sendDigests: true
+
+# Digest configuration
+digests:
+  frequency: "weekly"
+  recipients:
+    - "ian.lp.fitzgerald@gmail.com"
+    - "Wendy_tui@yahoo.com"
+  includeForwarded: true
+  includePending: true
+
+# Schedule (optional, for automated runs)
+schedule:
+  agentRuns: "0 6 * * *"  # 6 AM daily
+  cleanup: "0 3 * * *"    # 3 AM daily
