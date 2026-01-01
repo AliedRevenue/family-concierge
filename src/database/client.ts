@@ -1148,4 +1148,92 @@ export class DatabaseClient {
     const result = stmt.get(email) as { cnt: number };
     return result.cnt > 0;
   }
+
+  /**
+   * Dismissed Items Methods
+   */
+
+  dismissItem(itemId: string, reason: string, context: {
+    itemType: 'pending_approval' | 'deferred';
+    originalSubject?: string;
+    originalFrom?: string;
+    originalDate?: string;
+    person?: string;
+    packId?: string;
+  }): void {
+    const now = new Date().toISOString();
+    const { v4: uuid } = require('uuid');
+
+    const stmt = this.db.prepare(`
+      INSERT INTO dismissed_items 
+      (id, item_type, item_id, dismissed_at, reason, original_subject, original_from, original_date, person, pack_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      uuid(),
+      context.itemType,
+      itemId,
+      now,
+      reason,
+      context.originalSubject || null,
+      context.originalFrom || null,
+      context.originalDate || null,
+      context.person || null,
+      context.packId || null,
+      now
+    );
+  }
+
+  getDismissedItems(startDate?: string, endDate?: string): any[] {
+    let query = `
+      SELECT * FROM dismissed_items
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (startDate) {
+      query += ` AND dismissed_at >= ?`;
+      params.push(startDate);
+    }
+    if (endDate) {
+      query += ` AND dismissed_at <= ?`;
+      params.push(endDate);
+    }
+
+    query += ` ORDER BY dismissed_at DESC`;
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...params);
+  }
+
+  getDismissedItemsByPerson(person: string, startDate?: string, endDate?: string): any[] {
+    let query = `
+      SELECT * FROM dismissed_items
+      WHERE person = ?
+    `;
+    const params: any[] = [person];
+
+    if (startDate) {
+      query += ` AND dismissed_at >= ?`;
+      params.push(startDate);
+    }
+    if (endDate) {
+      query += ` AND dismissed_at <= ?`;
+      params.push(endDate);
+    }
+
+    query += ` ORDER BY dismissed_at DESC`;
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...params);
+  }
+
+  isItemDismissed(itemId: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as cnt FROM dismissed_items WHERE item_id = ?
+    `);
+    const result = stmt.get(itemId) as { cnt: number };
+    return result.cnt > 0;
+  }
 }

@@ -198,6 +198,128 @@ async function main(): Promise<void> {
       await emailSender.sendDigest(digest, recipients, textContent, htmlContent);
       console.log(`✅ Digest sent to ${recipients.join(', ')}`);
     }
+  } else if (command === 'dismiss') {
+    // Dismiss an item (deferred or pending approval)
+    const itemId = process.argv[3];
+    const reason = process.argv.slice(4).join(' ');
+
+    if (!itemId) {
+      console.error('❌ Error: Item ID required');
+      console.error('Usage: npx tsx src/index.ts dismiss <item-id> <reason>');
+      console.error('Example: npx tsx src/index.ts dismiss abc123 "not doing soccer this season"');
+      process.exit(1);
+    }
+
+    if (!reason) {
+      console.error('❌ Error: Dismissal reason required');
+      console.error('Usage: npx tsx src/index.ts dismiss <item-id> <reason>');
+      process.exit(1);
+    }
+
+    // Check if item exists in pending_approvals
+    const pendingItem = db.getPendingApprovalById(itemId);
+    
+    if (pendingItem) {
+      // Dismiss pending approval item
+      db.dismissItem(itemId, reason, {
+        itemType: 'pending_approval',
+        originalSubject: pendingItem.subject,
+        originalFrom: pendingItem.from_email,
+        originalDate: pendingItem.discovered_at,
+        person: pendingItem.person,
+        packId: pendingItem.pack_id,
+      });
+
+      // Delete from pending approvals
+      db.deletePendingApproval(itemId);
+
+      console.log(`\n⌀ Dismissed: ${pendingItem.subject}`);
+      console.log(`   Reason: ${reason}`);
+      console.log(`   Person: ${pendingItem.person || 'unassigned'}`);
+      console.log(`   Action: Removed from pending queue\n`);
+    } else {
+      console.error(`❌ Error: Item ${itemId} not found in pending approvals`);
+      console.error('   Run digest to see available items with IDs');
+      process.exit(1);
+    }
+  } else if (command === 'audit') {
+    // Configuration audit command
+    const person = process.argv[3];
+    
+    if (!person) {
+      console.error('❌ Error: Person name required');
+      console.error('Usage: npx tsx src/index.ts audit <person>');
+      console.error('Example: npx tsx src/index.ts audit emma');
+      process.exit(1);
+    }
+
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`FAMILY CONCIERGE AUDIT — ${person.charAt(0).toUpperCase() + person.slice(1)}`);
+    console.log(`Generated: ${new Date().toLocaleString()}`);
+    console.log('='.repeat(80));
+
+    // Get pack configuration for this person
+    const packs = config?.packs || [];
+    const schoolPack = packs.find((p: any) => p.packId === 'school');
+    
+    console.log('\n📧 EMAIL DOMAINS WATCHED');
+    if (schoolPack && schoolPack.config?.sources && schoolPack.config.sources.length > 0) {
+      console.log('  ✓ School:');
+      schoolPack.config.sources.forEach((source: any) => {
+        const domains = source.fromDomains || [source.name || source];
+        domains.forEach((domain: string) => {
+          console.log(`    • ${domain} → Calendar + Digest`);
+        });
+      });
+    } else {
+      console.log('  ⚠️  No school sources configured');
+    }
+
+    // Show deferred items
+    console.log('\n⏳ DEFERRED ITEMS (need attention)');
+    const pendingItems = db.getPendingApprovals('school');
+    const personItems = pendingItems.filter((item: any) => 
+      item.person?.toLowerCase() === person.toLowerCase() && !item.approved
+    );
+
+    if (personItems.length === 0) {
+      console.log('  [None]');
+    } else {
+      personItems.forEach((item: any, index: number) => {
+        const deferredDays = Math.floor(
+          (Date.now() - new Date(item.discovered_at).getTime()) / (1000 * 60 * 60 * 24)
+        );
+        console.log(`  ${index + 1}. ? ${item.subject}`);
+        console.log(`     Deferred since: ${new Date(item.discovered_at).toLocaleDateString()} (${deferredDays} days ago)`);
+        console.log(`     Item ID: ${item.id}`);
+        console.log(`     Dismiss: npx tsx src/index.ts dismiss ${item.id} "reason"`);
+        console.log('');
+      });
+    }
+
+    // Show dismissed items (last 7 days)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const dismissedItems = db.getDismissedItemsByPerson(person.toLowerCase(), sevenDaysAgo);
+    
+    console.log('\n⌀ DISMISSED THIS WEEK');
+    if (dismissedItems.length === 0) {
+      console.log('  [None]');
+    } else {
+      dismissedItems.forEach((item: any) => {
+        console.log(`  ⌀ ${item.original_subject || 'Unknown item'}`);
+        console.log(`    Reason: "${item.reason}"`);
+        console.log(`    Dismissed: ${new Date(item.dismissed_at).toLocaleDateString()}`);
+        console.log('');
+      });
+    }
+
+    console.log('\n' + '='.repeat(80));
+    console.log('NEXT ACTIONS');
+    console.log('='.repeat(80));
+    console.log('\nTo dismiss an item:');
+    console.log('  npx tsx src/index.ts dismiss <item-id> "reason"');
+    console.log('\nTo see full configuration:');
+    console.log('  cat config/agent-config.yaml\n');
   } else if (command === 'backfill') {
     // Backfill historical events
     const backfillCmd = new BackfillCommand(
