@@ -78,6 +78,9 @@ async function main(): Promise<void> {
   
   console.log('   Config loaded:', !!config, '| Digests:', !!config?.digests, '| Notifications:', !!config?.notifications);
 
+  // Get packs from config for use in various commands
+  const packs = config?.packs || [];
+
   // 3. Setup OAuth
   console.log('🔐 Setting up OAuth...');
   const auth = await getAuthClient();
@@ -140,7 +143,8 @@ async function main(): Promise<void> {
     console.log('\n👉 Review discovery results in database and update your config.');
   } else if (command === 'digest') {
     // Generate and send digest
-    console.log('📧 Generating digest...\n');
+    const mode = process.argv[3] === 'weekly' ? 'weekly' : 'daily';
+    console.log(`📧 Generating ${mode} digest...\n`);
 
     const digestBuilder = new DigestBuilder(db);
     const emailSender = new EmailSender(gmailApi);
@@ -151,7 +155,10 @@ async function main(): Promise<void> {
 
     const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
     
-    const digest = await digestBuilder.generateDigest(from, to, baseUrl);
+    // Generate digest based on mode
+    const digest = mode === 'weekly' 
+      ? await digestBuilder.generateWeeklyReconciliation(from, to, packs, baseUrl)
+      : await digestBuilder.generateDigest(from, to, baseUrl);
 
     // Check if digest has content
     if (!digest.sections || digest.sections.length === 0) {
@@ -167,6 +174,7 @@ async function main(): Promise<void> {
 
     // Show digest summary
     console.log(`📊 Digest Summary (${from} to ${to}):`);
+    console.log(`   Mode: ${digest.mode || 'daily'}`);
     console.log(`   Events Created: ${digest.stats.eventsCreated}`);
     console.log(`   Pending Review: ${digest.stats.eventsPending}`);
     console.log(`   Approved & Discovered: ${digest.summary.approvedPending ?? 0}`);
@@ -259,7 +267,6 @@ async function main(): Promise<void> {
     console.log('='.repeat(80));
 
     // Get pack configuration for this person
-    const packs = config?.packs || [];
     const schoolPack = packs.find((p: any) => p.packId === 'school');
     
     console.log('\n📧 EMAIL DOMAINS WATCHED');

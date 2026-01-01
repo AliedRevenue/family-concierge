@@ -489,9 +489,12 @@ export interface ForwardedMessage {
 // Digest & User Notifications
 // ========================================
 
+export type DigestMode = 'daily' | 'weekly';
+
 export interface Digest {
   id: string;
   generatedAt: string;
+  mode?: DigestMode; // 'daily' or 'weekly'
   period: {
     startDate: string;
     endDate: string;
@@ -523,7 +526,7 @@ export interface DigestStats {
 
 export interface DigestSection {
   title: string;
-  type: 'pending_approval' | 'created' | 'updated' | 'errors' | 'flagged' | 'forwarded' | 'approved_pending';
+  type: 'pending_approval' | 'created' | 'updated' | 'errors' | 'flagged' | 'forwarded' | 'approved_pending' | 'deferred' | 'dismissed';
   items: DigestItem[];
 }
 
@@ -562,6 +565,14 @@ export interface DigestItem {
   excerpt?: string;            // First 300-500 chars, escaped
   gmailLink?: string;          // Deep link to email in Gmail
   messageId?: string;          // For link construction
+  
+  // Trust Hardening Phase - State symbols
+  symbol?: string;             // "✓" | "?" | "⌀" | "⚠"
+  stateExplanation?: string;   // Why this symbol / what's missing
+  daysPending?: number;        // For deferred items
+  dismissedAt?: string;        // For dismissed items
+  dismissedReason?: string;    // Why it was dismissed
+  escalated?: boolean;         // If > 7 days pending
 }
 
 // ========================================

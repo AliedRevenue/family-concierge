@@ -34,6 +34,10 @@ export class DigestBuilder {
     const failedEvents = this.getEventsByStatusAndPeriod('failed', startDate, endDate);
     const forwardedMessages = this.getForwardedMessagesInPeriod(startDate, endDate);
     
+    // Get deferred and dismissed items
+    const deferredItems = this.getDeferredItems();
+    const dismissedItems = this.db.getDismissedItems(startDate, endDate);
+    
     // Count processed messages
     const processedCount = this.getProcessedMessageCount(startDate, endDate);
 
@@ -71,12 +75,21 @@ export class DigestBuilder {
       }
     }
 
+    // Section 0: Deferred Items (NEEDS ATTENTION)
+    if (deferredItems.length > 0) {
+      sections.push({
+        title: `⏳ NEEDS YOUR ATTENTION (${deferredItems.length})`,
+        type: 'deferred',
+        items: deferredItems,
+      });
+    }
+
     // Section 1: Events Created
     if (createdEvents.length > 0) {
       sections.push({
         title: `✅ Events Created (${createdEvents.length})`,
         type: 'created',
-        items: createdEvents.map(event => this.eventToDigestItem(event)),
+        items: createdEvents.map(event => this.eventToDigestItem(event, '✓')),
       });
     }
 
@@ -85,7 +98,7 @@ export class DigestBuilder {
       sections.push({
         title: `⚠️  Pending Review (${pendingEvents.length})`,
         type: 'pending_approval',
-        items: pendingEvents.map(event => this.eventToDigestItem(event, baseUrl)),
+        items: pendingEvents.map(event => this.eventToDigestItem(event, '⚠', baseUrl)),
       });
     }
 
@@ -98,7 +111,16 @@ export class DigestBuilder {
       });
     }
 
-    // Section 4: Errors
+    // Section 4: Dismissed This Week
+    if (dismissedItems.length > 0) {
+      sections.push({
+        title: `⌀ DISMISSED THIS WEEK (${dismissedItems.length})`,
+        type: 'dismissed',
+        items: dismissedItems.map(item => this.dismissedItemToDigestItem(item)),
+      });
+    }
+
+    // Section 5: Errors
     if (failedEvents.length > 0) {
       sections.push({
         title: `❌ Errors (${failedEvents.length})`,
@@ -194,6 +216,50 @@ export class DigestBuilder {
   }
 
   /**
+   * Generate weekly reconciliation digest (Sunday 8pm format)
+   * Shows what system is watching, caught, needs attention, dismissed, potential misses
+   */
+  async generateWeeklyReconciliation(startDate: string, endDate: string, packs: any[], baseUrl: string = 'http://localhost:3000'): Promise<Digest> {
+    const id = uuidv4();
+    const generatedAt = new Date().toISOString();
+    
+    // Reuse existing logic
+    const digest = await this.generateDigest(startDate, endDate, baseUrl);
+    digest.mode = 'weekly';
+    
+    // Add "What I'm Watching" section at the beginning
+    const watchingSections: DigestSection[] = [];
+    
+    for (const pack of packs) {
+      const config = pack.config;
+      if (!config || !config.sources) continue;
+      
+      const watchedDomains: string[] = [];
+      config.sources.forEach((source: any) => {
+        if (source.fromDomains) {
+          watchedDomains.push(...source.fromDomains);
+        }
+      });
+      
+      if (watchedDomains.length > 0) {
+        watchingSections.push({
+          title: `📧 WHAT I'M WATCHING - ${pack.person || 'Unknown'}`,
+          type: 'approved_pending', // Reuse type
+          items: watchedDomains.map(domain => ({
+            title: `✓ Watching: ${domain}`,
+            description: 'Calendar + Digest',
+          })),
+        });
+      }
+    }
+    
+    // Prepend watching sections
+    digest.sections = [...watchingSections, ...digest.sections];
+    
+    return digest;
+  }
+
+  /**
    * Get approved emails for a pack from pending_approvals table
    */
   private getApprovedEmailsByPack(packId: string, startDate: string, endDate: string): any[] {
@@ -212,7 +278,7 @@ export class DigestBuilder {
   /**
    * Convert PersistedEvent to DigestItem
    */
-  private eventToDigestItem(event: PersistedEvent, baseUrl?: string): DigestItem {
+  private eventToDigestItem(event: PersistedEvent, symbol?: string, baseUrl?: string): DigestItem {
     const eventDate = new Date(event.eventIntent.startDateTime);
     const formatted = this.formatDate(eventDate);
 
@@ -224,6 +290,7 @@ export class DigestBuilder {
       action: this.getActionText(event.status),
       calendarEventId: event.calendarEventId,
       error: event.error,
+      symbol: symbol,
     };
 
     // Add approval token for pending events
@@ -341,6 +408,11 @@ export class DigestBuilder {
   private itemToHTML(item: DigestItem, baseUrl: string): string {
     let html = '<div class="item">\n';
 
+    // Add symbol if present
+    if (item.symbol) {
+      html += `  <span class="item-symbol">${item.symbol}</span> `;
+    }
+
     if (item.title) {
       html += `  <div class="item-title">${this.escapeHTML(item.title)}</div>\n`;
     }
@@ -349,7 +421,12 @@ export class DigestBuilder {
       html += `  <div class="item-summary">${this.escapeHTML(item.summaryFact)}</div>\n`;
     }
 
-    // Metadata line: From | Category | Confidence
+    // State explanation (for deferred/dismissed items)
+    if (item.stateExplanation) {
+      html += `  <div class="item-state">${this.escapeHTML(item.stateExplanation)}</div>\n`;
+    }
+
+    // Metadata line: From | Category | Confidence | Days Pending
     const metaParts: string[] = [];
     if (item.fromEmail) {
       const from = item.fromName ? `${item.fromName} (${item.fromEmail})` : item.fromEmail;
@@ -361,16 +438,22 @@ export class DigestBuilder {
     if (item.confidence && item.confidence < 0.95) {
       metaParts.push(`${Math.round(item.confidence * 100)}% confident`);
     }
+    if (item.daysPending !== undefined) {
+      metaParts.push(`${item.daysPending} day(s) pending`);
+    }
 
     if (metaParts.length > 0) {
       html += `  <div class="item-meta">${metaParts.join(' | ')}</div>\n`;
     }
 
-    // Actions: Open email link + excerpt
-    if (item.gmailLink || item.excerpt) {
+    // Actions: Open email link + excerpt + dismiss command
+    if (item.gmailLink || item.excerpt || item.metadata?.dismissCommand) {
       html += '  <div class="item-actions">\n';
       if (item.gmailLink) {
         html += `    <a href="${item.gmailLink}" class="action-link">Open email</a>\n`;
+      }
+      if (item.metadata?.dismissCommand) {
+        html += `    <code style="font-size: 11px; background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">${this.escapeHTML(item.metadata.dismissCommand)}</code>\n`;
       }
       if (item.excerpt) {
         html += `    <details class="excerpt-details">\n`;
@@ -447,6 +530,75 @@ export class DigestBuilder {
       const processed = new Date(msg.processedAt);
       return processed >= new Date(startDate) && processed <= new Date(endDate);
     }).length;
+  }
+
+  /**
+   * Get deferred items (pending approvals with no action taken)
+   * Shows items that need parent attention
+   */
+  private getDeferredItems(): DigestItem[] {
+    try {
+      const conn = this.db.getConnection();
+      const stmt = conn.prepare(`
+        SELECT * FROM pending_approvals
+        WHERE approved = 0 AND (action IS NULL OR action = '')
+        ORDER BY created_at ASC
+      `);
+      const items = stmt.all();
+      
+      return items.map((item: any) => {
+        const createdAt = new Date(item.created_at);
+        const now = new Date();
+        const daysPending = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const escalated = daysPending >= 7;
+        
+        return {
+          id: item.id,
+          title: item.subject || 'No subject',
+          subject: item.subject,
+          fromName: item.from_name,
+          fromEmail: item.from_email,
+          snippet: item.snippet,
+          date: createdAt.toLocaleDateString(),
+          daysPending,
+          escalated,
+          symbol: escalated ? '🚨' : '?',
+          stateExplanation: escalated 
+            ? `URGENT: Pending for ${daysPending} days. Please dismiss or forward.`
+            : `Pending for ${daysPending} day(s). Missing complete information to create calendar event.`,
+          gmailLink: item.message_id ? generateGmailLink(item.message_id) || undefined : undefined,
+          metadata: {
+            itemId: item.id,
+            dismissCommand: `npx tsx src/index.ts dismiss ${item.id} "reason"`,
+          },
+        };
+      });
+    } catch (error) {
+      console.error('Error fetching deferred items:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Convert dismissed item to DigestItem
+   */
+  private dismissedItemToDigestItem(item: any): DigestItem {
+    const dismissedAt = new Date(item.dismissed_at);
+    return {
+      id: item.id,
+      title: item.original_subject || 'No subject',
+      subject: item.original_subject,
+      fromEmail: item.original_from,
+      date: item.original_date ? new Date(item.original_date).toLocaleDateString() : undefined,
+      dismissedAt: item.dismissed_at,
+      dismissedReason: item.reason,
+      symbol: '⌀',
+      stateExplanation: `Dismissed ${dismissedAt.toLocaleDateString()}: ${item.reason}`,
+      metadata: {
+        person: item.person,
+        dismissedBy: item.dismissed_by,
+      },
+    };
   }
 
   /**
@@ -582,6 +734,19 @@ export class DigestBuilder {
       font-size: 12px;
       color: #6b7280;
       margin-bottom: 8px;
+    }
+    .item-symbol {
+      font-size: 16px;
+      margin-right: 6px;
+    }
+    .item-state {
+      font-size: 13px;
+      color: #374151;
+      margin-bottom: 8px;
+      padding: 8px;
+      background-color: #fef3c7;
+      border-radius: 4px;
+      border-left: 3px solid #f59e0b;
     }
     .item-actions {
       font-size: 13px;
@@ -847,9 +1012,45 @@ export class DigestBuilder {
       text += `${'-'.repeat(60)}\n\n`;
       
       for (const item of section.items) {
+        // Add symbol prefix
+        const symbol = item.symbol || '';
+        const prefix = symbol ? `${symbol} ` : '';
+        
+        // Deferred items
+        if (section.type === 'deferred') {
+          text += `${prefix}${item.title}\n`;
+          if (item.stateExplanation) {
+            text += `  ${item.stateExplanation}\n`;
+          }
+          if (item.fromEmail) {
+            const from = item.fromName ? `${item.fromName} (${item.fromEmail})` : item.fromEmail;
+            text += `  From: ${from}\n`;
+          }
+          if (item.daysPending !== undefined) {
+            text += `  Days pending: ${item.daysPending}\n`;
+          }
+          if (item.gmailLink) {
+            text += `  [Open in Gmail]: ${item.gmailLink}\n`;
+          }
+          if (item.metadata?.dismissCommand) {
+            text += `  To dismiss: ${item.metadata.dismissCommand}\n`;
+          }
+          text += `\n`;
+        }
+        // Dismissed items
+        else if (section.type === 'dismissed') {
+          text += `${prefix}${item.title}\n`;
+          if (item.stateExplanation) {
+            text += `  ${item.stateExplanation}\n`;
+          }
+          if (item.fromEmail) {
+            text += `  From: ${item.fromEmail}\n`;
+          }
+          text += `\n`;
+        }
         // Use enhanced rendering for approved_pending items
-        if (section.type === 'approved_pending' && item.title && item.gmailLink) {
-          text += `• ${item.title}\n`;
+        else if (section.type === 'approved_pending' && item.title && item.gmailLink) {
+          text += `${prefix}${item.title}\n`;
           if (item.summaryFact) {
             text += `  Summary: ${item.summaryFact}\n`;
           }
@@ -868,7 +1069,7 @@ export class DigestBuilder {
           }
           text += `\n`;
         } else if (item.eventTitle) {
-          text += `• ${item.eventTitle}\n`;
+          text += `${prefix}${item.eventTitle}\n`;
           text += `  ${item.eventDate || ''} | Confidence: ${Math.round((item.confidence || 0) * 100)}%\n`;
           
           if (item.approvalToken) {
@@ -876,11 +1077,11 @@ export class DigestBuilder {
           }
           text += `\n`;
         } else if (item.subject) {
-          text += `• ${item.subject}\n`;
+          text += `${prefix}${item.subject}\n`;
           text += `  ${item.snippet || ''}\n`;
           text += `  Forwarded to: ${item.forwardedTo?.join(', ') || ''}\n\n`;
         } else if (item.title) {
-          text += `• ${item.title}\n`;
+          text += `${prefix}${item.title}\n`;
           text += `  ${item.description || ''}\n`;
           text += `  Relevance: ${Math.round((item.relevanceScore || 0) * 100)}%\n\n`;
         }
