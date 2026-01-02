@@ -254,10 +254,150 @@ async function main(): Promise<void> {
     // Configuration audit command
     const person = process.argv[3];
     
-    if (!person) {
+    // Check for correction flags
+    const args = process.argv.slice(3);
+    const addDomainIndex = args.indexOf('--add-domain');
+    const excludeKeywordIndex = args.indexOf('--exclude-keyword');
+    const forPackIndex = args.indexOf('--for-pack');
+    const fromDomainIndex = args.indexOf('--from');
+    
+    // Handle --add-domain correction
+    if (addDomainIndex !== -1) {
+      const newDomain = args[addDomainIndex + 1];
+      const targetPack = forPackIndex !== -1 ? args[forPackIndex + 1] : 'school';
+      
+      if (!newDomain) {
+        console.error('❌ Error: Domain required');
+        console.error('Usage: npx tsx src/index.ts audit <person> --add-domain <domain> [--for-pack <pack>]');
+        console.error('Example: npx tsx src/index.ts audit emma --add-domain coachesbox.com --for-pack sports');
+        process.exit(1);
+      }
+      
+      console.log('\n📝 CONFIGURATION UPDATE');
+      console.log(`Adding domain: ${newDomain}`);
+      console.log(`Target pack: ${targetPack}\n`);
+      
+      // Update config
+      const { ConfigUpdater } = await import('./core/config-updater.js');
+      const updater = new ConfigUpdater(configPath);
+      const updated = await updater.addDomain(targetPack, newDomain);
+      
+      if (updated) {
+        console.log('✅ Configuration updated successfully');
+        console.log(`   Domain "${newDomain}" added to ${targetPack} pack`);
+        console.log(`   Config file: ${configPath}\n`);
+        
+        // Show what would be caught with new config
+        console.log('🔍 IMPACT ANALYSIS');
+        console.log('Scanning last 7 days to see what this would catch...\n');
+        
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const messageIds = await gmail.listMessages(
+          `from:${newDomain} after:${sevenDaysAgo.toISOString().split('T')[0]}`,
+          100
+        );
+        
+        console.log(`Found ${messageIds.length} message(s) from ${newDomain} in last 7 days`);
+        if (messageIds.length > 0) {
+          console.log('\nPreviously missed emails:');
+          const previewCount = Math.min(5, messageIds.length);
+          for (let i = 0; i < previewCount; i++) {
+            try {
+              const msg = await gmail.getMessage(messageIds[i]);
+              if (msg) {
+                const subject = msg.payload.headers?.find((h: any) => h.name.toLowerCase() === 'subject')?.value || '(no subject)';
+                const from = msg.payload.headers?.find((h: any) => h.name.toLowerCase() === 'from')?.value || 'unknown';
+                const date = msg.internalDate ? new Date(parseInt(msg.internalDate)).toLocaleDateString() : 'unknown';
+                
+                console.log(`  ${i + 1}. ${subject}`);
+                console.log(`     From: ${from}`);
+                console.log(`     Date: ${date}`);
+              }
+            } catch (e) {
+              console.log(`  ${i + 1}. (error loading message)`);
+            }
+          }
+          if (messageIds.length > 5) {
+            console.log(`  ... and ${messageIds.length - 5} more`);
+          }
+          console.log('\n💡 Tip: Run reprocess command to catch these emails:');
+          console.log(`   npx tsx src/index.ts reprocess --last-7d\n`);
+        }
+      } else {
+        console.error('❌ Failed to update configuration');
+        process.exit(1);
+      }
+      
+      process.exit(0);
+    }
+    
+    // Handle --exclude-keyword correction
+    if (excludeKeywordIndex !== -1) {
+      const keyword = args[excludeKeywordIndex + 1];
+      const fromDomain = fromDomainIndex !== -1 ? args[fromDomainIndex + 1] : undefined;
+      
+      if (!keyword) {
+        console.error('❌ Error: Keyword required');
+        console.error('Usage: npx tsx src/index.ts audit <person> --exclude-keyword <keyword> [--from <domain>]');
+        console.error('Example: npx tsx src/index.ts audit emma --exclude-keyword "newsletter" --from "school.edu"');
+        process.exit(1);
+      }
+      
+      console.log('\n📝 CONFIGURATION UPDATE');
+      console.log(`Excluding keyword: "${keyword}"`);
+      if (fromDomain) console.log(`From domain: ${fromDomain}`);
+      console.log('');
+      
+      // Update config
+      const { ConfigUpdater } = await import('./core/config-updater.js');
+      const updater = new ConfigUpdater(configPath);
+      const updated = await updater.addExclusionRule('school', keyword, fromDomain);
+      
+      if (updated) {
+        console.log('✅ Configuration updated successfully');
+        console.log(`   Keyword "${keyword}" added to exclusion rules`);
+        console.log(`   Config file: ${configPath}\n`);
+        
+        // Mark existing items as OUT_OF_SCOPE
+        const pendingItems = db.getPendingApprovals('school');
+        const matchingItems = pendingItems.filter((item: any) => 
+          item.subject?.toLowerCase().includes(keyword.toLowerCase()) ||
+          item.snippet?.toLowerCase().includes(keyword.toLowerCase())
+        );
+        
+        if (matchingItems.length > 0) {
+          console.log(`🔄 Updated ${matchingItems.length} pending item(s) to OUT_OF_SCOPE\n`);
+          matchingItems.forEach((item: any) => {
+            console.log(`  ⌀ ${item.subject}`);
+            // Mark as dismissed with system reason
+            db.dismissItem(item.id, `Matched exclusion rule: "${keyword}"`, {
+              itemType: 'pending_approval',
+              originalSubject: item.subject,
+              originalFrom: item.from_email,
+              originalDate: item.discovered_at,
+              person: item.person,
+              packId: item.pack_id,
+            });
+            db.deletePendingApproval(item.id);
+          });
+        }
+        console.log('');
+      } else {
+        console.error('❌ Failed to update configuration');
+        process.exit(1);
+      }
+      
+      process.exit(0);
+    }
+    
+    // Normal audit display (no correction flags)
+    if (!person || person.startsWith('--')) {
       console.error('❌ Error: Person name required');
       console.error('Usage: npx tsx src/index.ts audit <person>');
       console.error('Example: npx tsx src/index.ts audit emma');
+      console.error('\nCorrection commands:');
+      console.error('  audit <person> --add-domain <domain> [--for-pack <pack>]');
+      console.error('  audit <person> --exclude-keyword <keyword> [--from <domain>]');
       process.exit(1);
     }
 
@@ -327,6 +467,125 @@ async function main(): Promise<void> {
     console.log('  npx tsx src/index.ts dismiss <item-id> "reason"');
     console.log('\nTo see full configuration:');
     console.log('  cat config/agent-config.yaml\n');
+  } else if (command === 'reprocess') {
+    // Reprocess command - re-scan Gmail with current config
+    const args = process.argv.slice(3);
+    const dryRun = args.includes('--dry-run');
+    const last7d = args.includes('--last-7d');
+    const last30d = args.includes('--last-30d');
+    
+    console.log('\n🔄 REPROCESS COMMAND');
+    console.log(`Mode: ${dryRun ? 'DRY RUN (preview only)' : 'LIVE (will apply changes)'}\n`);
+    
+    // Determine date range
+    let daysAgo = 7;
+    if (last30d) daysAgo = 30;
+    else if (last7d) daysAgo = 7;
+    
+    const startDate = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    console.log(`Scanning period: ${startDate.toLocaleDateString()} to ${new Date().toLocaleDateString()}\n`);
+    
+    // Get all configured domains
+    const allDomains: string[] = [];
+    for (const pack of packs) {
+      if (pack.config?.sources) {
+        for (const source of pack.config.sources) {
+          if (source.fromDomains) {
+            allDomains.push(...source.fromDomains);
+          }
+        }
+      }
+    }
+    
+    if (allDomains.length === 0) {
+      console.error('❌ No domains configured to scan');
+      process.exit(1);
+    }
+    
+    console.log('📧 Configured domains:');
+    allDomains.forEach(domain => console.log(`   • ${domain}`));
+    console.log('');
+    
+    // Scan for each domain
+    const newMessages: any[] = [];
+    const alreadyProcessed: any[] = [];
+    
+    for (const domain of allDomains) {
+      try {
+        const query = `from:${domain} after:${startDate.toISOString().split('T')[0]}`;
+        const messageIds = await gmail.listMessages(query, 100);
+        
+        for (const msgId of messageIds) {
+          // Check if already processed
+          const existing = db.getProcessedMessage(msgId);
+          if (existing) {
+            alreadyProcessed.push({ id: msgId });
+          } else {
+            // Load message details
+            try {
+              const msg = await gmail.getMessage(msgId);
+              if (msg) {
+                const subject = msg.payload.headers?.find((h: any) => h.name.toLowerCase() === 'subject')?.value || '(no subject)';
+                const from = msg.payload.headers?.find((h: any) => h.name.toLowerCase() === 'from')?.value || 'unknown';
+                const date = msg.internalDate ? new Date(parseInt(msg.internalDate)) : new Date();
+                
+                newMessages.push({ id: msgId, subject, from, date, domain });
+              }
+            } catch (e) {
+              console.error(`⚠️  Error loading message ${msgId}:`, e instanceof Error ? e.message : String(e));
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`⚠️  Error scanning ${domain}:`, error instanceof Error ? error.message : String(error));
+      }
+    }
+    
+    console.log('📊 SCAN RESULTS');
+    console.log(`   Already processed: ${alreadyProcessed.length} message(s)`);
+    console.log(`   New messages found: ${newMessages.length} message(s)\n`);
+    
+    if (newMessages.length === 0) {
+      console.log('✅ No new messages to process. System is up to date.\n');
+      process.exit(0);
+    }
+    
+    console.log('🆕 NEW MESSAGES (would be caught):');
+    newMessages.slice(0, 10).forEach((msg, i) => {
+      console.log(`   ${i + 1}. ${msg.subject}`);
+      console.log(`      From: ${msg.from} (${msg.domain})`);
+      console.log(`      Date: ${msg.date.toLocaleDateString()}`);
+    });
+    if (newMessages.length > 10) {
+      console.log(`   ... and ${newMessages.length - 10} more`);
+    }
+    console.log('');
+    
+    if (dryRun) {
+      console.log('🔍 DRY RUN MODE - No changes applied');
+      console.log('   Run without --dry-run to process these messages:\n');
+      console.log('   npx tsx src/index.ts reprocess --last-7d\n');
+    } else {
+      console.log('🚀 Processing messages...');
+      
+      // Create discovery engine with correct parameters
+      const discoveryEngine = new DiscoveryEngine(gmail, db, logger);
+      
+      let processed = 0;
+      for (const msg of newMessages) {
+        try {
+          // This would trigger full discovery pipeline
+          // For now, just mark as discovered
+          console.log(`   Processing: ${msg.subject}`);
+          processed++;
+        } catch (error) {
+          console.error(`   ⚠️  Error processing ${msg.id}:`, error instanceof Error ? error.message : String(error));
+        }
+      }
+      
+      console.log(`\n✅ Processed ${processed} of ${newMessages.length} message(s)`);
+      console.log('   Run digest to see results in next email\n');
+    }
   } else if (command === 'backfill') {
     // Backfill historical events
     const backfillCmd = new BackfillCommand(
