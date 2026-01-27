@@ -132,6 +132,29 @@ Family Ops
   }
 
   /**
+   * Send a custom email to one or multiple recipients
+   * Used for upcoming digests and other custom notifications
+   */
+  async sendCustomEmail(
+    recipients: string | string[],
+    subject: string,
+    textContent: string,
+    htmlContent: string
+  ): Promise<void> {
+    const recipientList = Array.isArray(recipients) ? recipients : [recipients];
+
+    for (const recipient of recipientList) {
+      await this.sendEmail({
+        to: recipient,
+        subject,
+        textContent,
+        htmlContent,
+      });
+      console.log(`✓ Email sent to ${recipient}`);
+    }
+  }
+
+  /**
    * Send error alert email
    */
   async sendErrorAlert(recipient: string, errorMessage: string, context: string): Promise<void> {

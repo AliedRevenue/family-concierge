@@ -177,12 +177,16 @@ export class AgentOrchestrator {
       }
     }
 
+    // Check if this is a newsletter before determining extraction status
+    const subject = this.gmail.getHeader(message, 'subject') || '';
+    const isNewsletter = extractedEvents.length === 0 && this.isNewsletterEmail(subject);
+
     // Mark message as processed
     const processedMessage: ProcessedMessage = {
       messageId,
       processedAt: new Date().toISOString(),
       packId,
-      extractionStatus: extractedEvents.length > 0 ? 'success' : 'skipped',
+      extractionStatus: extractedEvents.length > 0 ? 'success' : (isNewsletter ? 'newsletter' : 'skipped'),
       eventsExtracted: extractedEvents.length,
       fingerprints,
     };
@@ -199,6 +203,56 @@ export class AgentOrchestrator {
     if (packConfig.forwarding?.enabled && extractedEvents.length === 0) {
       await this.handleForwarding(message, messageId, packId, packConfig);
     }
+
+    // If no events extracted, check if this is a newsletter/informational email
+    // These should be saved to pending_approvals for the "catch-up" section
+    if (isNewsletter) {
+      const fromHeader = this.gmail.getHeader(message, 'from') || '';
+      const fromMatch = fromHeader.match(/^(?:"?([^"<]*)"?\s*)?<?([^>]+)>?$/);
+      const fromName = fromMatch?.[1]?.trim() || '';
+      const fromEmail = fromMatch?.[2]?.trim() || fromHeader;
+
+      this.db.insertPendingApproval({
+          id: uuidv4(),
+          messageId,
+          packId,
+          relevanceScore: 0.5, // Lower score for informational emails
+          fromEmail,
+          fromName,
+          subject,
+          snippet: message.snippet || '',
+          primaryCategory: 'newsletter',
+          saveReasons: ['Informational email - newsletter/update'],
+          emailBodyText: body.text || '',
+          emailBodyHtml: body.html || '',
+        });
+
+      this.logger.info('AgentOrchestrator', 'newsletter_saved', {
+        messageId,
+        packId,
+        subject,
+      });
+    }
+  }
+
+  /**
+   * Check if an email subject matches newsletter patterns
+   */
+  private isNewsletterEmail(subject: string): boolean {
+    const lowerSubject = subject.toLowerCase();
+    const patterns = [
+      'newsletter',
+      'week of',
+      'weekly update',
+      'class update',
+      'announcement',
+      'this week',
+      'recap',
+      'what we did',
+      'classroom update',
+      'parent update',
+    ];
+    return patterns.some(pattern => lowerSubject.includes(pattern));
   }
 
   /**

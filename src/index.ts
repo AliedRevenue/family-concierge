@@ -26,7 +26,7 @@ import { AgentOrchestrator } from './core/agent-orchestrator.js';
 import { DigestBuilder } from './core/digest-builder.js';
 import { EmailSender } from './core/email-sender.js';
 import { BackfillCommand } from './backfill.js';
-import { SchoolPack } from './packs/index.js';
+import { SchoolPack, ActivitiesPack } from './packs/index.js';
 import { WebServer } from './web/web-server.js';
 import type { AgentMode } from './types/index.js';
 
@@ -95,6 +95,7 @@ async function main(): Promise<void> {
   // 5. Register packs
   const packRegistry = new PackRegistry();
   packRegistry.register(SchoolPack);
+  packRegistry.register(ActivitiesPack);
   console.log(`📦 Registered ${packRegistry.count()} pack(s)`);
 
   // 5b. Create digest builder and email sender (used by both web server and commands)
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
 
     console.log(`🔍 Running discovery for pack: ${pack.name}\n`);
 
-    const discoveryEngine = new DiscoveryEngine(gmail, db, logger);
+    const discoveryEngine = new DiscoveryEngine(gmail, db, logger, process.env.ANTHROPIC_API_KEY);
     const session = await discoveryEngine.runDiscovery(pack, config.processing.lookbackDays, userPackConfig?.config);
 
     console.log('\n✅ Discovery completed!');
@@ -569,7 +570,7 @@ async function main(): Promise<void> {
       console.log('🚀 Processing messages...');
       
       // Create discovery engine with correct parameters
-      const discoveryEngine = new DiscoveryEngine(gmail, db, logger);
+      const discoveryEngine = new DiscoveryEngine(gmail, db, logger, process.env.ANTHROPIC_API_KEY);
       
       let processed = 0;
       for (const msg of newMessages) {
@@ -595,12 +596,57 @@ async function main(): Promise<void> {
 
     const options = BackfillCommand.parseArgs(process.argv.slice(3));
     await backfillCmd.execute(options);
+  } else if (command === 'ics-sync') {
+    // Sync external ICS calendar feeds
+    console.log('\n📅 ICS CALENDAR SYNC');
+    console.log('Fetching and filtering external calendar feeds...\n');
+
+    const { ICSCalendarFetcher } = await import('./core/ics-calendar-fetcher.js');
+
+    const calendars = config.externalCalendars || [];
+    const familyMembers = config.family?.members || [];
+
+    if (calendars.length === 0) {
+      console.log('⚠️  No external calendars configured.');
+      console.log('   Add calendars to config/agent-config.yaml under externalCalendars');
+      process.exit(0);
+    }
+
+    if (familyMembers.length === 0) {
+      console.log('⚠️  No family members configured.');
+      console.log('   Add family members to config/agent-config.yaml under family.members');
+      process.exit(0);
+    }
+
+    console.log(`Found ${calendars.length} calendar(s) and ${familyMembers.length} family member(s)`);
+    console.log('Family members:', familyMembers.map(m => `${m.name} (${m.grade || 'no grade'})`).join(', '));
+    console.log('');
+
+    const fetcher = new ICSCalendarFetcher(db, {
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+      model: 'claude-sonnet-4-20250514',
+    });
+
+    const result = await fetcher.syncAllCalendars(calendars, familyMembers);
+
+    console.log('\n✅ ICS sync completed!');
+    console.log(`   Events fetched: ${result.fetched}`);
+    console.log(`   Events synced to DB: ${result.synced}`);
+    console.log('\n   View results on the dashboard at http://localhost:5000\n');
   } else {
     // Normal agent run - start web server for dashboard
     console.log('🏃 Starting agent run...\n');
 
-    // Start web server (dashboard + approvals)
-    const webServer = new WebServer(db, digestBuilder, emailSender, 5000);
+    // Chat configuration (from env or config)
+    const chatConfig = {
+      enabled: !!process.env.ANTHROPIC_API_KEY,
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      model: 'claude-sonnet-4-20250514',
+      maxTokens: 1024,
+    };
+
+    // Start web server (dashboard + approvals + chat)
+    const webServer = new WebServer(db, digestBuilder, emailSender, 5000, gmail, config, chatConfig);
     await webServer.start();
 
     const orchestrator = new AgentOrchestrator(

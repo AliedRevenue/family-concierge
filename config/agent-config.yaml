@@ -22,7 +22,6 @@ packs:
           keywords:
             - "Colin"
             - "Henry"
-            - "Fitzgerald"
             - "Colin Fitzgerald"
             - "Henry Fitzgerald"
             - "early release"
@@ -61,7 +60,10 @@ packs:
       sources:
         - name: "Kids Activities"
           type: email
-          fromDomains: []  # Will match any sender
+          fromDomains:
+            - "bigblueswimschool.com"
+            - "mymusicstaff.com"
+            - "*appassionata*"
           keywords:
             - "Colin"
             - "Henry"
@@ -100,22 +102,6 @@ calendar:
 # Family members and assignment rules
 family:
   members:
-    - name: "Emma"
-      aliases:
-        - "Emma"
-        - "E."
-        - "Emma Fitzgerald"
-      groupAliases:
-        - "Emma's class"
-        - "Emma's team"
-    - name: "James"
-      aliases:
-        - "James"
-        - "J."
-        - "James Fitzgerald"
-      groupAliases:
-        - "James's class"
-        - "James's team"
     - name: "Colin"
       aliases:
         - "Colin"
@@ -124,6 +110,15 @@ family:
       groupAliases:
         - "Colin's class"
         - "Colin's team"
+        - "Class II"
+        - "2nd Grade"
+        - "Second Grade"
+      grade: "2nd"
+      gradeAliases:
+        - "Class II"
+        - "2nd Grade"
+        - "Second Grade"
+        - "Grade 2"
     - name: "Henry"
       aliases:
         - "Henry"
@@ -132,7 +127,45 @@ family:
       groupAliases:
         - "Henry's class"
         - "Henry's team"
+        - "Kindergarten"
+        - "Class K"
+      grade: "K"
+      gradeAliases:
+        - "Kindergarten"
+        - "Class K"
+        - "K"
+        - "Pre-1"
   defaultAssignmentFallback: "Family/Shared" # Use for items that don't match any family member
+
+  # Source-based assignment rules (checked before text-based matching)
+  # When multiple kids are assigned, AI will try to refine using grade/name context
+  sourceAssignments:
+    - match:
+        fromDomain: "bigblueswimschool.com"
+      assignTo: ["Colin", "Henry"]  # Both boys swim - AI will refine if possible
+
+    - match:
+        fromDomain: "mymusicstaff.com"
+      assignTo: ["Colin", "Henry"]  # Both do piano - AI will refine if possible
+
+    - match:
+        fromDomain: "*appassionata*"
+      assignTo: ["Colin", "Henry"]  # Music school - AI will refine if possible
+
+# External calendar feeds (ICS)
+externalCalendars:
+  - name: "School Household Calendar"
+    url: "https://api.veracross.com/waterford/subscribe/04D7D2A7-C8FF-404B-95C2-53ED475FB0FD.ics?uid=CAA9422C-BE60-4AB2-9059-DFDF04A80A1E"
+    type: "school"
+    enabled: true
+    syncFrequency: "weekly"
+    filterByGrade: true  # Use AI to filter events by grade relevance
+  - name: "School Assignments"
+    url: "https://api.veracross.com/waterford/subscribe/41B491D0-FC29-4A18-B12F-53917EF1C1F3.ics?uid=8358DF34-F17A-4153-BF54-E4F0E2ACED10"
+    type: "assignments"
+    enabled: true
+    syncFrequency: "weekly"
+    filterByGrade: true
 # Invite policy
 invites:
   defaultGuests: []
@@ -153,7 +186,7 @@ defaults:
 # Processing configuration
 processing:
   maxEmailsPerRun: 50
-  lookbackDays: 14
+  lookbackDays: 21
   deduplicationWindowDays: 14
 
 # Notifications (REQUIRED for Phase 2)
@@ -175,3 +208,9 @@ digests:
 schedule:
   agentRuns: "0 6 * * *"  # 6 AM daily
   cleanup: "0 3 * * *"    # 3 AM daily
+
+# Chat feature (requires ANTHROPIC_API_KEY environment variable)
+chat:
+  enabled: true
+  model: "claude-sonnet-4-20250514"  # claude-sonnet-4-20250514 or claude-haiku-3-5-20241022 for lower cost
+  maxTokens: 1024

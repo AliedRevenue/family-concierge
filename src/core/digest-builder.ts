@@ -1106,4 +1106,269 @@ export class DigestBuilder {
 
     return text;
   }
+
+  /**
+   * Generate upcoming summary for dashboard and email
+   * Returns events for next N days + emails worth reading
+   */
+  getUpcomingSummary(days: number = 14): {
+    events: Array<{
+      id: string;
+      title: string;
+      startDateTime: string;
+      endDateTime: string;
+      location?: string;
+      person?: string;
+      pack: string;
+      status: string;
+      symbol: string;
+      sourceMessageId?: string;
+      gmailLink?: string;
+    }>;
+    emailsWorthReading: Array<{
+      id: string;
+      subject: string;
+      fromName?: string;
+      fromEmail: string;
+      snippet?: string;
+      category?: string;
+      person?: string;
+      daysAgo: number;
+      gmailLink?: string;
+    }>;
+    summary: {
+      eventsNext14Days: number;
+      emailsWorthReading: number;
+      generatedAt: string;
+    };
+  } {
+    // Get upcoming events
+    const upcomingEvents = this.db.getUpcomingEvents(days);
+
+    // Format events for display
+    const events = upcomingEvents.map((event) => {
+      const intent = event.eventIntent;
+      const symbol = event.status === 'created' ? '✓' :
+                     event.status === 'pending_approval' ? '⚠' :
+                     event.status === 'flagged' ? '?' : '•';
+
+      return {
+        id: event.id,
+        title: intent.title,
+        startDateTime: intent.startDateTime,
+        endDateTime: intent.endDateTime,
+        location: intent.location,
+        person: undefined, // Would need to infer from pack/context
+        pack: event.packId,
+        status: event.status,
+        symbol,
+        sourceMessageId: event.sourceMessageId,
+        gmailLink: event.sourceMessageId
+          ? `https://mail.google.com/mail/u/0/#inbox/${event.sourceMessageId}`
+          : undefined,
+      };
+    });
+
+    // Get emails worth reading
+    const worthReading = this.db.getEmailsWorthReading(undefined, 10);
+
+    const emailsWorthReading = worthReading.map((email: any) => ({
+      id: email.id,
+      subject: email.subject,
+      fromName: email.from_name,
+      fromEmail: email.from_email,
+      snippet: email.snippet,
+      category: email.primary_category,
+      person: email.person,
+      daysAgo: email.days_ago || 0,
+      gmailLink: email.message_id
+        ? `https://mail.google.com/mail/u/0/#inbox/${email.message_id}`
+        : undefined,
+    }));
+
+    return {
+      events,
+      emailsWorthReading,
+      summary: {
+        eventsNext14Days: events.length,
+        emailsWorthReading: emailsWorthReading.length,
+        generatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Generate plain text upcoming digest for email
+   */
+  generateUpcomingDigestText(days: number = 14, baseUrl: string = 'http://localhost:5000'): string {
+    const { events, emailsWorthReading, summary } = this.getUpcomingSummary(days);
+
+    const now = new Date();
+    const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    const startStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endStr = endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    let text = `WHAT'S COMING UP (${startStr} - ${endStr})\n`;
+    text += `${'='.repeat(50)}\n\n`;
+
+    if (events.length === 0) {
+      text += `No upcoming events found.\n\n`;
+    } else {
+      // Group events by date
+      const eventsByDate = new Map<string, typeof events>();
+      for (const event of events) {
+        const dateKey = new Date(event.startDateTime).toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+        });
+        if (!eventsByDate.has(dateKey)) {
+          eventsByDate.set(dateKey, []);
+        }
+        eventsByDate.get(dateKey)!.push(event);
+      }
+
+      for (const [dateKey, dateEvents] of eventsByDate.entries()) {
+        text += `${dateKey}\n`;
+        text += `${'-'.repeat(dateKey.length)}\n`;
+        for (const event of dateEvents) {
+          const time = new Date(event.startDateTime).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+          });
+          const location = event.location ? ` - ${event.location}` : '';
+          const person = event.person ? ` (${event.person})` : '';
+          text += `${event.symbol} ${event.title}${location} @ ${time}${person}\n`;
+        }
+        text += `\n`;
+      }
+    }
+
+    text += `\nEMAILS WORTH READING\n`;
+    text += `${'='.repeat(50)}\n\n`;
+
+    if (emailsWorthReading.length === 0) {
+      text += `No emails need your attention.\n`;
+    } else {
+      for (let i = 0; i < emailsWorthReading.length; i++) {
+        const email = emailsWorthReading[i];
+        text += `${i + 1}. ${email.subject}\n`;
+        const from = email.fromName ? `${email.fromName}` : email.fromEmail;
+        text += `   From: ${from} • ${email.daysAgo} day(s) ago\n`;
+        if (email.snippet) {
+          text += `   "${email.snippet.substring(0, 100)}..."\n`;
+        }
+        if (email.gmailLink) {
+          text += `   → Open: ${email.gmailLink}\n`;
+        }
+        text += `\n`;
+      }
+    }
+
+    text += `\n${'='.repeat(50)}\n`;
+    text += `View Dashboard: ${baseUrl}\n`;
+
+    return text;
+  }
+
+  /**
+   * Generate HTML upcoming digest for email
+   */
+  generateUpcomingDigestHTML(days: number = 14, baseUrl: string = 'http://localhost:5000'): string {
+    const { events, emailsWorthReading, summary } = this.getUpcomingSummary(days);
+
+    const now = new Date();
+    const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    const startStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endStr = endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    let html = `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }
+    .content { background: white; padding: 20px; border-radius: 0 0 8px 8px; }
+    .date-group { margin-bottom: 20px; }
+    .date-header { font-weight: bold; color: #667eea; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px; }
+    .event { padding: 10px; margin-bottom: 8px; background: #f9fafb; border-left: 3px solid #667eea; }
+    .event.pending { border-left-color: #f59e0b; }
+    .symbol { font-size: 1.2em; margin-right: 8px; }
+    .email-item { padding: 15px; margin-bottom: 10px; background: #f9fafb; border-left: 3px solid #3b82f6; }
+    .email-subject { font-weight: bold; margin-bottom: 5px; }
+    .email-meta { color: #6b7280; font-size: 0.9em; }
+    .email-snippet { font-style: italic; color: #4b5563; margin-top: 5px; }
+    .btn { display: inline-block; padding: 8px 16px; background: #667eea; color: white; text-decoration: none; border-radius: 4px; margin-top: 10px; }
+    .section-title { font-size: 1.1em; font-weight: bold; margin: 20px 0 10px; color: #333; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1 style="margin:0;">📅 What's Coming Up</h1>
+    <p style="margin:5px 0 0;">${startStr} - ${endStr}</p>
+  </div>
+  <div class="content">`;
+
+    if (events.length === 0) {
+      html += `<p>No upcoming events found.</p>`;
+    } else {
+      // Group events by date
+      const eventsByDate = new Map<string, typeof events>();
+      for (const event of events) {
+        const dateKey = new Date(event.startDateTime).toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+        });
+        if (!eventsByDate.has(dateKey)) {
+          eventsByDate.set(dateKey, []);
+        }
+        eventsByDate.get(dateKey)!.push(event);
+      }
+
+      for (const [dateKey, dateEvents] of eventsByDate.entries()) {
+        html += `<div class="date-group">
+          <div class="date-header">${dateKey}</div>`;
+        for (const event of dateEvents) {
+          const time = new Date(event.startDateTime).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+          });
+          const isPending = event.status === 'pending_approval';
+          const location = event.location ? ` - ${event.location}` : '';
+          html += `<div class="event ${isPending ? 'pending' : ''}">
+            <span class="symbol">${event.symbol}</span>
+            <strong>${this.escapeHTML(event.title)}</strong>${location} @ ${time}
+          </div>`;
+        }
+        html += `</div>`;
+      }
+    }
+
+    html += `<div class="section-title">📬 Emails Worth Reading</div>`;
+
+    if (emailsWorthReading.length === 0) {
+      html += `<p>No emails need your attention.</p>`;
+    } else {
+      for (const email of emailsWorthReading) {
+        const from = email.fromName || email.fromEmail;
+        html += `<div class="email-item">
+          <div class="email-subject">${this.escapeHTML(email.subject)}</div>
+          <div class="email-meta">From: ${this.escapeHTML(from)} • ${email.daysAgo} day(s) ago</div>
+          ${email.snippet ? `<div class="email-snippet">"${this.escapeHTML(email.snippet.substring(0, 100))}..."</div>` : ''}
+          ${email.gmailLink ? `<a href="${email.gmailLink}" class="btn">Open in Gmail</a>` : ''}
+        </div>`;
+      }
+    }
+
+    html += `
+    <p style="margin-top: 20px; text-align: center;">
+      <a href="${baseUrl}" class="btn">View Dashboard</a>
+    </p>
+  </div>
+</body>
+</html>`;
+
+    return html;
+  }
 }

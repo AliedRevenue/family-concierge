@@ -170,12 +170,50 @@ export interface EventDefaults {
 // Configuration System
 // ========================================
 
+export interface FamilyMember {
+  name: string;
+  aliases?: string[];
+  groupAliases?: string[];
+  grade?: string;
+  gradeAliases?: string[];
+}
+
+export interface SourceAssignmentMatch {
+  fromDomain?: string;           // e.g., "bigblueswimschool.com"
+  fromEmail?: string;            // e.g., "notifications@swim.com"
+  subjectContains?: string;      // e.g., "Piano Lesson"
+  keywords?: string[];           // e.g., ["hip-hop", "dance"]
+}
+
+export interface SourceAssignment {
+  match: SourceAssignmentMatch;
+  assignTo: string[];            // e.g., ["Colin", "Henry"]
+  refineWithAI?: boolean;        // Default true - try to narrow down using grade/context
+}
+
+export interface FamilyConfig {
+  members: FamilyMember[];
+  defaultAssignmentFallback?: string;
+  sourceAssignments?: SourceAssignment[];
+}
+
+export interface ExternalCalendar {
+  name: string;
+  url: string;
+  type: 'school' | 'assignments' | 'activities' | 'other';
+  enabled: boolean;
+  syncFrequency: 'daily' | 'weekly' | 'monthly';
+  filterByGrade?: boolean;
+}
+
 export interface AgentConfig {
   version: string;
   createdAt: string;
   updatedAt: string;
   packs: EnabledPack[];
   calendar: CalendarConfig;
+  family?: FamilyConfig;
+  externalCalendars?: ExternalCalendar[];
   invites: InvitePolicy;
   confidence: ConfidenceThresholds;
   defaults: GlobalDefaults;
@@ -420,7 +458,7 @@ export interface ProcessedMessage {
   messageId: string;
   processedAt: string;
   packId: string;
-  extractionStatus: 'success' | 'failed' | 'skipped';
+  extractionStatus: 'success' | 'failed' | 'skipped' | 'newsletter';
   eventsExtracted: number;
   fingerprints: string[];
   error?: string;
@@ -602,4 +640,69 @@ export interface AuditLog {
   messageId?: string;
   eventFingerprint?: string;
   userId?: string;
+}
+
+// ========================================
+// Smart Domain Discovery
+// ========================================
+
+export interface SuggestedDomain {
+  id: string;
+  packId: string;
+  domain: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  emailCount: number;
+  matchedKeywords: string[];
+  evidenceMessageIds: string[];
+  sampleSubjects?: string[];
+  confidence: number;
+  status: 'pending' | 'approved' | 'rejected';
+  approvedAt?: string;
+  approvedBy?: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+  rejectionReason?: string;
+}
+
+export interface DomainExplorationRun {
+  id: string;
+  packId: string;
+  runAt: string;
+  queryUsed: string;
+  emailsScanned: number;
+  newDomainsFound: number;
+  suggestionsCreated: number;
+  durationMs?: number;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+}
+
+export interface RejectedDomain {
+  id: string;
+  packId: string;
+  domain: string;
+  rejectedAt: string;
+  rejectedBy: string;
+  reason: string;
+  originalEmailCount?: number;
+  originalMatchedKeywords?: string[];
+}
+
+export interface DomainExplorerConfig {
+  packId: string;
+  keywords: string[];
+  watchedDomains: string[];
+  lookbackDays: number;
+  minEmailsForSuggestion: number;
+  minConfidence: number;
+}
+
+export interface DomainSuggestion {
+  domain: string;
+  emailCount: number;
+  matchedKeywords: string[];
+  evidenceMessageIds: string[];
+  confidence: number;
+  sampleSubjects: string[];
 }

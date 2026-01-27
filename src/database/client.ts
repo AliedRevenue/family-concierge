@@ -4,6 +4,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { v4 as uuid } from 'uuid';
 import type {
   ProcessedMessage,
   PersistedEvent,
@@ -33,6 +34,22 @@ export class DatabaseClient {
    */
   getConnection(): Database.Database {
     return this.db;
+  }
+
+  /**
+   * Build a person filter that handles comma-separated multi-person assignments
+   * Returns { sql: string, params: string[] }
+   * E.g., for person="Colin", matches: "Colin", "Colin, Henry", "Henry, Colin"
+   */
+  private buildPersonFilter(person: string, columnName: string = 'pa.person'): { sql: string; params: string[] } {
+    // Match: exact, starts with "Person, ", ends with ", Person", or middle ", Person, "
+    const sql = `AND (
+      ${columnName} = ?
+      OR ${columnName} LIKE ? || ', %'
+      OR ${columnName} LIKE '%, ' || ?
+      OR ${columnName} LIKE '%, ' || ? || ', %'
+    )`;
+    return { sql, params: [person, person, person, person] };
   }
 
   /**
@@ -219,6 +236,41 @@ export class DatabaseClient {
       ORDER BY json_extract(event_intent, '$.startDateTime')
     `);
     return stmt.all(startDate, endDate).map((row: any) => this.rowToPersistedEvent(row));
+  }
+
+  /**
+   * Get upcoming events for the next N days
+   */
+  getUpcomingEvents(days: number = 14): PersistedEvent[] {
+    const now = new Date();
+    const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    return this.findEventsByDateRange(now.toISOString(), endDate.toISOString());
+  }
+
+  /**
+   * Get emails worth reading (pending approvals not dismissed, sorted by relevance)
+   */
+  getEmailsWorthReading(packId?: string, limit: number = 10): any[] {
+    let query = `
+      SELECT pa.*,
+        CAST((julianday('now') - julianday(pa.created_at)) AS INTEGER) as days_ago
+      FROM pending_approvals pa
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      WHERE pa.approved = 0
+        AND di.id IS NULL
+    `;
+    const params: any[] = [];
+
+    if (packId) {
+      query += ` AND pa.pack_id = ?`;
+      params.push(packId);
+    }
+
+    query += ` ORDER BY pa.relevance_score DESC, pa.created_at DESC LIMIT ?`;
+    params.push(limit);
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...params);
   }
 
   findDuplicateEvents(
@@ -721,14 +773,21 @@ export class DatabaseClient {
     saveReasons?: string[];
     person?: string;
     assignmentReason?: string;
+    emailBodyText?: string;
+    emailBodyHtml?: string;
+    itemType?: 'obligation' | 'announcement';
+    obligationDate?: string | null;
+    classificationConfidence?: number;
+    classificationReasoning?: string;
   }): void {
     const stmt = this.db.prepare(`
       INSERT OR IGNORE INTO pending_approvals (
         id, message_id, pack_id, relevance_score,
         from_email, from_name, subject, snippet, created_at, approved,
         primary_category, secondary_categories, category_scores, save_reasons,
-        person, assignment_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+        person, assignment_reason, email_body_text, email_body_html,
+        item_type, obligation_date, classification_confidence, classification_reasoning, classified_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -746,7 +805,14 @@ export class DatabaseClient {
       approval.categoryScores ? JSON.stringify(approval.categoryScores) : null,
       approval.saveReasons ? JSON.stringify(approval.saveReasons) : null,
       approval.person || null,
-      approval.assignmentReason || null
+      approval.assignmentReason || null,
+      approval.emailBodyText || null,
+      approval.emailBodyHtml || null,
+      approval.itemType || 'unknown',
+      approval.obligationDate || null,
+      approval.classificationConfidence || null,
+      approval.classificationReasoning || null,
+      approval.itemType ? new Date().toISOString() : null
     );
   }
 
@@ -1046,7 +1112,6 @@ export class DatabaseClient {
     receiveApprovals?: boolean;
   }): void {
     const now = new Date().toISOString();
-    const { v4: uuid } = require('uuid');
     
     const stmt = this.db.prepare(`
       INSERT INTO notification_recipients 
@@ -1162,7 +1227,6 @@ export class DatabaseClient {
     packId?: string;
   }): void {
     const now = new Date().toISOString();
-    const { v4: uuid } = require('uuid');
 
     const stmt = this.db.prepare(`
       INSERT INTO dismissed_items 
@@ -1208,11 +1272,13 @@ export class DatabaseClient {
   }
 
   getDismissedItemsByPerson(person: string, startDate?: string, endDate?: string): any[] {
+    // Use multi-person filter to handle comma-separated assignments
+    const pf = this.buildPersonFilter(person, 'person');
     let query = `
       SELECT * FROM dismissed_items
-      WHERE person = ?
+      WHERE 1=1 ${pf.sql}
     `;
-    const params: any[] = [person];
+    const params: any[] = [...pf.params];
 
     if (startDate) {
       query += ` AND dismissed_at >= ?`;
@@ -1235,5 +1301,886 @@ export class DatabaseClient {
     `);
     const result = stmt.get(itemId) as { cnt: number };
     return result.cnt > 0;
+  }
+
+  // ========================================
+  // Weekly Catch-Up / Newsletters
+  // ========================================
+
+  /**
+   * Get newsletters and class updates (informational emails, not actionable events)
+   * Matches patterns like "newsletter", "week of", "update", "announcement"
+   */
+  getNewsletters(limit: number = 20): any[] {
+    const newsletterPatterns = [
+      '%newsletter%',
+      '%week of%',
+      '%weekly update%',
+      '%class update%',
+      '%announcement%',
+      '%this week%',
+      '%recap%',
+      '%what we did%',
+      '%classroom update%',
+      '%parent update%',
+    ];
+
+    // Build OR conditions for subject matching
+    const conditions = newsletterPatterns.map(() => 'LOWER(pa.subject) LIKE ?').join(' OR ');
+
+    // Note: We don't filter by approved status because newsletters are
+    // informational - user wants to read them regardless of whether
+    // a calendar event was created. Only exclude dismissed items.
+    const query = `
+      SELECT pa.*,
+        CAST((julianday('now') - julianday(pa.created_at)) AS INTEGER) as days_ago,
+        CASE WHEN ri.id IS NOT NULL THEN 1 ELSE 0 END as is_read
+      FROM pending_approvals pa
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      LEFT JOIN read_items ri ON ri.item_id = pa.id
+      WHERE di.id IS NULL
+        AND (${conditions})
+      ORDER BY pa.created_at DESC
+      LIMIT ?
+    `;
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...newsletterPatterns, limit);
+  }
+
+  /**
+   * Get unread newsletters only
+   */
+  getUnreadNewsletters(limit: number = 20): any[] {
+    const all = this.getNewsletters(limit * 2); // Get more to filter
+    return all.filter((n: any) => !n.is_read).slice(0, limit);
+  }
+
+  /**
+   * Mark an item as read (softer than dismiss)
+   */
+  markAsRead(itemId: string, readBy: string = 'parent'): void {
+    // Check if already read
+    if (this.isRead(itemId)) return;
+
+    const stmt = this.db.prepare(`
+      INSERT INTO read_items (id, item_id, item_type, read_at, read_by)
+      VALUES (?, ?, 'pending_approval', ?, ?)
+    `);
+    stmt.run(uuid(), itemId, new Date().toISOString(), readBy);
+  }
+
+  /**
+   * Check if an item has been read
+   */
+  isRead(itemId: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as cnt FROM read_items WHERE item_id = ?
+    `);
+    const result = stmt.get(itemId) as { cnt: number };
+    return result.cnt > 0;
+  }
+
+  /**
+   * Get read items for audit
+   */
+  getReadItems(since?: string): any[] {
+    let query = `SELECT * FROM read_items`;
+    const params: string[] = [];
+
+    if (since) {
+      query += ` WHERE read_at >= ?`;
+      params.push(since);
+    }
+
+    query += ` ORDER BY read_at DESC`;
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...params);
+  }
+
+  // ========================================
+  // Smart Domain Discovery Methods
+  // ========================================
+
+  insertSuggestedDomain(suggestion: {
+    id: string;
+    packId: string;
+    domain: string;
+    emailCount: number;
+    matchedKeywords: string[];
+    evidenceMessageIds: string[];
+    sampleSubjects?: string[];
+    confidence: number;
+  }): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT INTO suggested_domains
+      (id, pack_id, domain, first_seen_at, last_seen_at, email_count,
+       matched_keywords, evidence_message_ids, sample_subjects, confidence, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `);
+
+    stmt.run(
+      suggestion.id,
+      suggestion.packId,
+      suggestion.domain,
+      now,
+      now,
+      suggestion.emailCount,
+      JSON.stringify(suggestion.matchedKeywords),
+      JSON.stringify(suggestion.evidenceMessageIds),
+      suggestion.sampleSubjects ? JSON.stringify(suggestion.sampleSubjects) : null,
+      suggestion.confidence,
+      now,
+      now
+    );
+  }
+
+  getSuggestedDomains(packId: string, status?: 'pending' | 'approved' | 'rejected'): any[] {
+    let query = `SELECT * FROM suggested_domains WHERE pack_id = ?`;
+    const params: any[] = [packId];
+
+    if (status) {
+      query += ` AND status = ?`;
+      params.push(status);
+    }
+
+    query += ` ORDER BY confidence DESC, email_count DESC`;
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...params);
+  }
+
+  getSuggestedDomainById(id: string): any {
+    const stmt = this.db.prepare(`SELECT * FROM suggested_domains WHERE id = ?`);
+    return stmt.get(id);
+  }
+
+  getSuggestedDomainByDomain(packId: string, domain: string): any {
+    const stmt = this.db.prepare(`
+      SELECT * FROM suggested_domains WHERE pack_id = ? AND domain = ?
+    `);
+    return stmt.get(packId, domain);
+  }
+
+  updateSuggestedDomain(id: string, updates: {
+    emailCount?: number;
+    matchedKeywords?: string[];
+    evidenceMessageIds?: string[];
+    sampleSubjects?: string[];
+    confidence?: number;
+    lastSeenAt?: string;
+  }): void {
+    const now = new Date().toISOString();
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (updates.emailCount !== undefined) {
+      fields.push('email_count = ?');
+      params.push(updates.emailCount);
+    }
+    if (updates.matchedKeywords !== undefined) {
+      fields.push('matched_keywords = ?');
+      params.push(JSON.stringify(updates.matchedKeywords));
+    }
+    if (updates.evidenceMessageIds !== undefined) {
+      fields.push('evidence_message_ids = ?');
+      params.push(JSON.stringify(updates.evidenceMessageIds));
+    }
+    if (updates.sampleSubjects !== undefined) {
+      fields.push('sample_subjects = ?');
+      params.push(JSON.stringify(updates.sampleSubjects));
+    }
+    if (updates.confidence !== undefined) {
+      fields.push('confidence = ?');
+      params.push(updates.confidence);
+    }
+    if (updates.lastSeenAt !== undefined) {
+      fields.push('last_seen_at = ?');
+      params.push(updates.lastSeenAt);
+    }
+
+    fields.push('updated_at = ?');
+    params.push(now);
+    params.push(id);
+
+    const stmt = this.db.prepare(`
+      UPDATE suggested_domains SET ${fields.join(', ')} WHERE id = ?
+    `);
+    stmt.run(...params);
+  }
+
+  approveSuggestedDomain(id: string): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      UPDATE suggested_domains
+      SET status = 'approved', approved_at = ?, approved_by = 'parent', updated_at = ?
+      WHERE id = ?
+    `);
+    stmt.run(now, now, id);
+  }
+
+  rejectSuggestedDomain(id: string, reason: string, permanent: boolean = true): void {
+    const now = new Date().toISOString();
+
+    // Update suggestion status
+    const updateStmt = this.db.prepare(`
+      UPDATE suggested_domains
+      SET status = 'rejected', rejected_at = ?, rejected_by = 'parent', rejection_reason = ?, updated_at = ?
+      WHERE id = ?
+    `);
+    updateStmt.run(now, reason, now, id);
+
+    // If permanent, also add to rejected_domains table
+    if (permanent) {
+      const suggestion = this.getSuggestedDomainById(id);
+      if (suggestion) {
+        const insertStmt = this.db.prepare(`
+          INSERT OR IGNORE INTO rejected_domains
+          (id, pack_id, domain, rejected_at, rejected_by, reason, original_email_count, original_matched_keywords, created_at)
+          VALUES (?, ?, ?, ?, 'parent', ?, ?, ?, ?)
+        `);
+        insertStmt.run(
+          uuid(),
+          suggestion.pack_id,
+          suggestion.domain,
+          now,
+          reason,
+          suggestion.email_count,
+          suggestion.matched_keywords,
+          now
+        );
+      }
+    }
+  }
+
+  isRejectedDomain(packId: string, domain: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as cnt FROM rejected_domains WHERE pack_id = ? AND domain = ?
+    `);
+    const result = stmt.get(packId, domain) as { cnt: number };
+    return result.cnt > 0;
+  }
+
+  getRejectedDomains(packId: string): any[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM rejected_domains WHERE pack_id = ? ORDER BY rejected_at DESC
+    `);
+    return stmt.all(packId);
+  }
+
+  insertExplorationRun(run: {
+    id: string;
+    packId: string;
+    runAt: string;
+    queryUsed: string;
+    emailsScanned: number;
+    newDomainsFound: number;
+    suggestionsCreated: number;
+    status: 'running' | 'completed' | 'failed';
+    durationMs?: number;
+    error?: string;
+  }): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT INTO domain_exploration_runs
+      (id, pack_id, run_at, query_used, emails_scanned, new_domains_found,
+       suggestions_created, duration_ms, status, error, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      run.id,
+      run.packId,
+      run.runAt,
+      run.queryUsed,
+      run.emailsScanned,
+      run.newDomainsFound,
+      run.suggestionsCreated,
+      run.durationMs || null,
+      run.status,
+      run.error || null,
+      now
+    );
+  }
+
+  updateExplorationRun(id: string, updates: {
+    status?: 'running' | 'completed' | 'failed';
+    emailsScanned?: number;
+    newDomainsFound?: number;
+    suggestionsCreated?: number;
+    durationMs?: number;
+    error?: string;
+  }): void {
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (updates.status !== undefined) {
+      fields.push('status = ?');
+      params.push(updates.status);
+    }
+    if (updates.emailsScanned !== undefined) {
+      fields.push('emails_scanned = ?');
+      params.push(updates.emailsScanned);
+    }
+    if (updates.newDomainsFound !== undefined) {
+      fields.push('new_domains_found = ?');
+      params.push(updates.newDomainsFound);
+    }
+    if (updates.suggestionsCreated !== undefined) {
+      fields.push('suggestions_created = ?');
+      params.push(updates.suggestionsCreated);
+    }
+    if (updates.durationMs !== undefined) {
+      fields.push('duration_ms = ?');
+      params.push(updates.durationMs);
+    }
+    if (updates.error !== undefined) {
+      fields.push('error = ?');
+      params.push(updates.error);
+    }
+
+    if (fields.length === 0) return;
+
+    params.push(id);
+
+    const stmt = this.db.prepare(`
+      UPDATE domain_exploration_runs SET ${fields.join(', ')} WHERE id = ?
+    `);
+    stmt.run(...params);
+  }
+
+  getRecentExplorationRuns(packId: string, limit: number = 10): any[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM domain_exploration_runs
+      WHERE pack_id = ?
+      ORDER BY run_at DESC
+      LIMIT ?
+    `);
+    return stmt.all(packId, limit);
+  }
+
+  // ========================================
+  // View Tokens (Read-only dashboard access)
+  // ========================================
+
+  /**
+   * Create a view token for read-only dashboard access
+   */
+  createViewToken(recipientId: string, expiresInDays: number = 30): string {
+    const token = uuid();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + expiresInDays * 24 * 60 * 60 * 1000);
+
+    const stmt = this.db.prepare(`
+      INSERT INTO view_tokens (id, recipient_id, token, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      uuid(),
+      recipientId,
+      token,
+      now.toISOString(),
+      expiresAt.toISOString()
+    );
+
+    return token;
+  }
+
+  /**
+   * Get view token details by token string
+   */
+  getViewToken(token: string): any | null {
+    const stmt = this.db.prepare(`
+      SELECT vt.*, nr.email, nr.name
+      FROM view_tokens vt
+      JOIN notification_recipients nr ON nr.id = vt.recipient_id
+      WHERE vt.token = ?
+    `);
+    return stmt.get(token) || null;
+  }
+
+  /**
+   * Validate a view token and update last_used_at
+   * Returns recipient info if valid, null if expired/invalid
+   */
+  validateViewToken(token: string): { recipientId: string; email: string; name: string } | null {
+    const viewToken = this.getViewToken(token);
+
+    if (!viewToken) {
+      return null;
+    }
+
+    // Check expiration
+    if (viewToken.expires_at && new Date(viewToken.expires_at) < new Date()) {
+      return null;
+    }
+
+    // Update last_used_at
+    const updateStmt = this.db.prepare(`
+      UPDATE view_tokens SET last_used_at = ? WHERE token = ?
+    `);
+    updateStmt.run(new Date().toISOString(), token);
+
+    return {
+      recipientId: viewToken.recipient_id,
+      email: viewToken.email,
+      name: viewToken.name || '',
+    };
+  }
+
+  /**
+   * Get recipient by email
+   */
+  getRecipientByEmail(email: string): any | null {
+    const stmt = this.db.prepare(`
+      SELECT * FROM notification_recipients WHERE email = ? AND is_active = 1
+    `);
+    return stmt.get(email) || null;
+  }
+
+  /**
+   * Get all view tokens for a recipient
+   */
+  getViewTokensForRecipient(recipientId: string): any[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM view_tokens
+      WHERE recipient_id = ?
+      ORDER BY created_at DESC
+    `);
+    return stmt.all(recipientId);
+  }
+
+  /**
+   * Revoke (delete) a view token
+   */
+  revokeViewToken(token: string): void {
+    const stmt = this.db.prepare(`
+      DELETE FROM view_tokens WHERE token = ?
+    `);
+    stmt.run(token);
+  }
+
+  /**
+   * Get email body for a pending approval
+   */
+  getEmailBody(approvalId: string): { text: string; html: string } | null {
+    const stmt = this.db.prepare(`
+      SELECT email_body_text, email_body_html FROM pending_approvals WHERE id = ?
+    `);
+    const result: any = stmt.get(approvalId);
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      text: result.email_body_text || '',
+      html: result.email_body_html || '',
+    };
+  }
+
+  // ========================================
+  // Dashboard Restructure: Obligations, Announcements, Catch-Up
+  // ========================================
+
+  /**
+   * Classify an item as obligation or announcement based on content
+   */
+  classifyItem(item: any): 'obligation' | 'announcement' | 'unknown' {
+    const subject = (item.subject || '').toLowerCase();
+    const category = item.primary_category || '';
+
+    // Obligation patterns
+    const obligationKeywords = [
+      'due', 'deadline', 'rsvp', 'sign up', 'signup', 'required', 'attend',
+      'concert', 'performance', 'parade', 'permission', 'conference',
+      'appointment', 'meeting', 'recital', 'game', 'match', 'tournament'
+    ];
+
+    const obligationCategories = ['medical_health', 'forms_admin', 'logistics'];
+
+    // Check for obligation
+    if (obligationCategories.includes(category)) {
+      return 'obligation';
+    }
+
+    for (const keyword of obligationKeywords) {
+      if (subject.includes(keyword)) {
+        return 'obligation';
+      }
+    }
+
+    // Announcement patterns
+    const announcementKeywords = [
+      'newsletter', 'update', 'this week', 'learning about', 'celebrating',
+      'class update', 'weekly', 'announcement', 'recap', 'what we did'
+    ];
+
+    for (const keyword of announcementKeywords) {
+      if (subject.includes(keyword)) {
+        return 'announcement';
+      }
+    }
+
+    return 'unknown';
+  }
+
+  /**
+   * Get obligation items (things requiring action/attendance)
+   * Uses AI classification (item_type = 'obligation') and time-based grouping
+   */
+  getObligationItems(packId?: string, person?: string): any[] {
+    // Get obligations from pending_approvals (AI-classified or with obligation_date)
+    // Show items where:
+    // - item_type = 'obligation' AND (obligation_date is in the future OR within last 24 hours)
+    // - OR has associated future event in events table
+    // If packId is not specified, get from all packs
+    // If person is specified, filter by person (supports comma-separated multi-person assignments)
+    const params: string[] = [];
+    let packFilter = '';
+    let personFilter = '';
+
+    if (packId) {
+      packFilter = 'AND pa.pack_id = ?';
+      params.push(packId);
+    }
+    if (person) {
+      const pf = this.buildPersonFilter(person);
+      personFilter = pf.sql;
+      params.push(...pf.params);
+    }
+
+    const sql = `
+      SELECT
+        pa.id,
+        pa.message_id,
+        pa.pack_id,
+        pa.subject,
+        pa.from_name,
+        pa.from_email,
+        pa.snippet,
+        pa.person,
+        pa.created_at,
+        pa.item_type,
+        pa.obligation_date,
+        pa.classification_reasoning,
+        COALESCE(pa.email_body_html, pa.email_body_text) as email_body,
+        e.event_intent,
+        json_extract(e.event_intent, '$.title') as event_title,
+        COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) as effective_date,
+        CASE
+          WHEN COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) <= date('now', '+7 days') THEN 'this_week'
+          WHEN COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) <= date('now', '+14 days') THEN 'next_week'
+          WHEN COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) <= date('now', '+30 days') THEN 'this_month'
+          ELSE 'later'
+        END as time_group,
+        CASE
+          WHEN COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) <= date('now', '+7 days') THEN 1
+          WHEN COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) <= date('now', '+14 days') THEN 2
+          WHEN COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) <= date('now', '+30 days') THEN 3
+          ELSE 4
+        END as time_group_order
+      FROM pending_approvals pa
+      LEFT JOIN events e ON e.source_message_id = pa.message_id
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      WHERE di.id IS NULL
+        ${packFilter}
+        ${personFilter}
+        AND (
+          -- AI classified as obligation with future date (today or later) - MUST have a date
+          (pa.item_type = 'obligation' AND pa.obligation_date >= date('now'))
+          -- OR has associated future event (today or later)
+          OR (e.id IS NOT NULL AND json_extract(e.event_intent, '$.startDateTime') >= datetime('now'))
+        )
+      ORDER BY time_group_order ASC, effective_date ASC, pa.created_at DESC
+    `;
+
+    const stmt = this.db.prepare(sql);
+    return stmt.all(...params);
+  }
+
+  /**
+   * Get task items (action items without specific dates)
+   * These are obligations that need to be done but don't have a specific deadline
+   * Examples: sign waivers, fill forms, review documents
+   */
+  getTaskItems(packId?: string, person?: string): any[] {
+    const params: string[] = [];
+    let packFilter = '';
+    let personFilter = '';
+
+    if (packId) {
+      packFilter = 'AND pa.pack_id = ?';
+      params.push(packId);
+    }
+    if (person) {
+      const pf = this.buildPersonFilter(person);
+      personFilter = pf.sql;
+      params.push(...pf.params);
+    }
+
+    const sql = `
+      SELECT
+        pa.id,
+        pa.message_id,
+        pa.pack_id,
+        pa.subject,
+        pa.from_name,
+        pa.from_email,
+        pa.snippet,
+        pa.person,
+        pa.created_at,
+        pa.item_type,
+        pa.classification_reasoning,
+        COALESCE(pa.email_body_html, pa.email_body_text) as email_body,
+        CAST((julianday('now') - julianday(pa.created_at)) AS INTEGER) as days_since_received
+      FROM pending_approvals pa
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      WHERE di.id IS NULL
+        ${packFilter}
+        ${personFilter}
+        -- Tasks are obligations WITHOUT dates
+        AND pa.item_type = 'obligation'
+        AND pa.obligation_date IS NULL
+        -- Only show recent tasks (within last 30 days)
+        AND pa.created_at >= datetime('now', '-30 days')
+      ORDER BY pa.created_at DESC
+    `;
+
+    const stmt = this.db.prepare(sql);
+    return stmt.all(...params);
+  }
+
+  /**
+   * Get announcement items (informational, no action required)
+   * Uses AI classification (item_type = 'announcement') and time-based visibility
+   * Shows announcements from the last 7 days, grouped by time
+   */
+  getAnnouncementItems(packId?: string, _includeRead: boolean = false): any[] {
+    const sql = `
+      SELECT
+        pa.id,
+        pa.message_id,
+        pa.pack_id,
+        pa.subject,
+        pa.from_name,
+        pa.from_email,
+        pa.snippet,
+        pa.person,
+        pa.created_at,
+        pa.item_type,
+        pa.obligation_date,
+        pa.classification_reasoning,
+        COALESCE(pa.email_body_html, pa.email_body_text) as email_body,
+        CAST((julianday('now') - julianday(pa.created_at)) AS INTEGER) as days_ago,
+        CASE
+          WHEN pa.created_at >= datetime('now', '-2 days') THEN 'this_week'
+          ELSE 'last_week'
+        END as time_group
+      FROM pending_approvals pa
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      WHERE di.id IS NULL
+        ${packId ? 'AND pa.pack_id = ?' : ''}
+        -- Show announcements from last 7 days (they age out automatically)
+        AND pa.created_at >= datetime('now', '-7 days')
+        -- AI classified as announcement OR unclassified (fallback for existing data)
+        AND (pa.item_type = 'announcement' OR pa.item_type = 'unknown' OR pa.item_type IS NULL)
+        -- Exclude items that are obligations
+        AND pa.item_type != 'obligation'
+      ORDER BY pa.created_at DESC
+    `;
+
+    const stmt = this.db.prepare(sql);
+    return packId ? stmt.all(packId) : stmt.all();
+  }
+
+  /**
+   * Get past items for Weekly Catch-Up
+   * Shows items that have "aged out" of the main sections:
+   * - Past obligations (obligation_date has passed, within last 7 days)
+   * - Old announcements (7-14 days old)
+   * - Past events that happened
+   */
+  getPastItems(packId?: string, daysBack: number = 7): any[] {
+    // Combined query for all catch-up items
+    const sql = `
+      SELECT
+        pa.id,
+        pa.message_id,
+        pa.pack_id,
+        pa.subject,
+        pa.from_name,
+        pa.from_email,
+        pa.person,
+        pa.created_at,
+        pa.item_type,
+        pa.obligation_date,
+        COALESCE(pa.email_body_html, pa.email_body_text) as email_body,
+        e.event_intent,
+        json_extract(e.event_intent, '$.title') as event_title,
+        COALESCE(pa.obligation_date, json_extract(e.event_intent, '$.startDateTime')) as effective_date,
+        CASE
+          WHEN pa.item_type = 'obligation' AND pa.obligation_date < date('now') THEN 'past_obligation'
+          WHEN e.id IS NOT NULL AND json_extract(e.event_intent, '$.startDateTime') < datetime('now') THEN 'past_event'
+          WHEN pa.created_at < datetime('now', '-7 days') THEN 'old_announcement'
+          ELSE 'archived'
+        END as catch_up_status
+      FROM pending_approvals pa
+      LEFT JOIN events e ON e.source_message_id = pa.message_id
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      WHERE di.id IS NULL
+        ${packId ? 'AND pa.pack_id = ?' : ''}
+        AND (
+          -- Past obligations (date has passed, within last 7 days)
+          (pa.item_type = 'obligation' AND pa.obligation_date < date('now') AND pa.obligation_date >= date('now', '-' || ? || ' days'))
+          -- Past events
+          OR (e.id IS NOT NULL AND json_extract(e.event_intent, '$.startDateTime') < datetime('now') AND json_extract(e.event_intent, '$.startDateTime') >= datetime('now', '-' || ? || ' days'))
+          -- Old announcements (7-14 days old)
+          OR (pa.item_type != 'obligation' AND pa.created_at < datetime('now', '-7 days') AND pa.created_at >= datetime('now', '-14 days'))
+        )
+      ORDER BY effective_date DESC, pa.created_at DESC
+    `;
+
+    const stmt = this.db.prepare(sql);
+    return packId ? stmt.all(packId, daysBack, daysBack) : stmt.all(daysBack, daysBack);
+  }
+
+  /**
+   * Get all updates - combines announcements and past items into one section
+   * Shows:
+   * - Recent announcements (last 14 days)
+   * - Past obligations that happened (last 14 days)
+   * - Past events
+   * Sorted by date, most recent first
+   */
+  getUpdatesItems(packId?: string, person?: string): any[] {
+    const params: string[] = [];
+    let packFilter = '';
+    let personFilter = '';
+
+    if (packId) {
+      packFilter = 'AND pa.pack_id = ?';
+      params.push(packId);
+    }
+    if (person) {
+      const pf = this.buildPersonFilter(person);
+      personFilter = pf.sql;
+      params.push(...pf.params);
+    }
+
+    const sql = `
+      SELECT
+        pa.id,
+        pa.message_id,
+        pa.pack_id,
+        pa.subject,
+        pa.from_name,
+        pa.from_email,
+        pa.snippet,
+        pa.person,
+        pa.created_at,
+        pa.item_type,
+        pa.obligation_date,
+        pa.classification_reasoning,
+        COALESCE(pa.email_body_html, pa.email_body_text) as email_body,
+        CAST((julianday('now') - julianday(pa.created_at)) AS INTEGER) as days_ago,
+        CASE
+          WHEN pa.item_type = 'obligation' AND pa.obligation_date < date('now') THEN 'past_event'
+          WHEN pa.item_type = 'announcement' THEN 'announcement'
+          ELSE 'update'
+        END as update_type,
+        COALESCE(pa.obligation_date, date(pa.created_at)) as sort_date
+      FROM pending_approvals pa
+      LEFT JOIN dismissed_items di ON di.item_id = pa.id
+      WHERE di.id IS NULL
+        ${packFilter}
+        ${personFilter}
+        AND pa.created_at >= datetime('now', '-14 days')
+        AND (
+          -- Announcements (informational)
+          pa.item_type = 'announcement'
+          OR pa.item_type = 'unknown'
+          OR pa.item_type IS NULL
+          -- OR past obligations (date has passed)
+          OR (pa.item_type = 'obligation' AND pa.obligation_date IS NOT NULL AND pa.obligation_date < date('now'))
+        )
+      ORDER BY sort_date DESC, pa.created_at DESC
+    `;
+
+    const stmt = this.db.prepare(sql);
+    return stmt.all(...params);
+  }
+
+  // ========================================
+  // Summary Cache
+  // ========================================
+
+  /**
+   * Get cached summary for a section
+   */
+  getCachedSummary(sectionType: string): { summary: string; generatedAt: string; itemCount: number } | null {
+    const stmt = this.db.prepare(`
+      SELECT summary_text, generated_at, item_count
+      FROM dashboard_summary_cache
+      WHERE section_type = ?
+        AND valid_until > datetime('now')
+      ORDER BY generated_at DESC
+      LIMIT 1
+    `);
+    const result: any = stmt.get(sectionType);
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      summary: result.summary_text,
+      generatedAt: result.generated_at,
+      itemCount: result.item_count,
+    };
+  }
+
+  /**
+   * Save summary to cache
+   */
+  saveSummaryCache(
+    sectionType: string,
+    summary: string,
+    itemIds: string[],
+    validMinutes: number = 30
+  ): void {
+    const now = new Date();
+    const validUntil = new Date(now.getTime() + validMinutes * 60 * 1000);
+
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO dashboard_summary_cache
+      (id, section_type, summary_text, generated_at, valid_until, item_count, item_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      sectionType, // Use section as ID for simple replacement
+      sectionType,
+      summary,
+      now.toISOString(),
+      validUntil.toISOString(),
+      itemIds.length,
+      JSON.stringify(itemIds)
+    );
+  }
+
+  /**
+   * Invalidate summary cache for a section
+   */
+  invalidateSummaryCache(sectionType?: string): void {
+    if (sectionType) {
+      const stmt = this.db.prepare('DELETE FROM dashboard_summary_cache WHERE section_type = ?');
+      stmt.run(sectionType);
+    } else {
+      this.db.exec('DELETE FROM dashboard_summary_cache');
+    }
   }
 }

@@ -19,15 +19,25 @@ import type { GmailConnector, GmailMessage } from './gmail-connector.js';
 import type { DatabaseClient } from '../database/client.js';
 import type { Logger } from '../utils/logger.js';
 import { CategoryClassifier } from './category-classifier.js';
+import { EmailClassifier } from './email-classifier.js';
 import { withTimeoutAndLog } from '../utils/timeout.js';
 import { createPersonAssignerFromConfig } from '../utils/person-assignment.js';
 
 export class DiscoveryEngine {
+  private emailClassifier?: EmailClassifier;
+
   constructor(
     private gmail: GmailConnector,
     private db: DatabaseClient,
-    private logger: Logger
-  ) {}
+    private logger: Logger,
+    apiKey?: string
+  ) {
+    // Initialize email classifier if API key is available
+    if (apiKey) {
+      this.emailClassifier = new EmailClassifier(apiKey);
+      console.log('📧 Email classifier initialized for AI-based classification');
+    }
+  }
 
   /**
    * Run discovery for a pack
@@ -260,7 +270,8 @@ export class DiscoveryEngine {
             if (PERSON_ASSIGNMENT_ENABLED) {
               const tAssign = Date.now();
               try {
-                personAssignment = personAssigner.assign(subject, (message.snippet || '').slice(0, 500), fromEmail, fromName);
+                // Pass body text for better refinement when multiple kids are assigned via source rules
+                personAssignment = personAssigner.assign(subject, (message.snippet || '').slice(0, 500), fromEmail, fromName, (body.text || '').slice(0, 2000));
                 const durAssign = Date.now() - tAssign;
                 console.log(`   [${msgNum}/${totalMsgs}] after assignPerson (${durAssign}ms) → ${personAssignment.person}`);
               } catch (assignError) {
@@ -271,9 +282,41 @@ export class DiscoveryEngine {
               console.log(`   [${msgNum}/${totalMsgs}] assignPerson disabled (PERSON_ASSIGNMENT_ENABLED=false)`);
             }
 
+            // Classify email using AI (if available)
+            let classification: {
+              itemType: 'obligation' | 'announcement';
+              obligationDate: string | null;
+              confidence: number;
+              reasoning: string;
+            } = {
+              itemType: 'announcement',
+              obligationDate: null,
+              confidence: 0.5,
+              reasoning: 'No AI classifier available',
+            };
+
+            if (this.emailClassifier) {
+              console.log(`   [${msgNum}/${totalMsgs}] before AI classification`);
+              const tClassify = Date.now();
+              try {
+                classification = await this.emailClassifier.classifyEmail({
+                  subject,
+                  snippet: message.snippet || '',
+                  fromName,
+                  fromEmail,
+                  bodyText: body.text,
+                  bodyHtml: body.html,
+                });
+                const durClassify = Date.now() - tClassify;
+                console.log(`   [${msgNum}/${totalMsgs}] after AI classification (${durClassify}ms) → ${classification.itemType}${classification.obligationDate ? ` on ${classification.obligationDate}` : ''}`);
+              } catch (classifyError) {
+                console.error(`   [${msgNum}/${totalMsgs}] AI classification error:`, classifyError);
+              }
+            }
+
             console.log(`   [${msgNum}/${totalMsgs}] before insertPendingApproval`);
             const tDb = Date.now();
-            
+
             this.db.insertPendingApproval({
               id: evidenceId,
               messageId,
@@ -289,8 +332,14 @@ export class DiscoveryEngine {
               saveReasons: categorization.saveReasons,
               person: personAssignment.person,
               assignmentReason: personAssignment.reason,
+              emailBodyText: body.text || '',
+              emailBodyHtml: body.html || '',
+              itemType: classification.itemType,
+              obligationDate: classification.obligationDate,
+              classificationConfidence: classification.confidence,
+              classificationReasoning: classification.reasoning,
             });
-            
+
             const durDb = Date.now() - tDb;
             console.log(`   [${msgNum}/${totalMsgs}] after insertPendingApproval (${durDb}ms)`);
           }

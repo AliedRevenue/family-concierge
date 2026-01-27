@@ -9,6 +9,25 @@ import { z } from 'zod';
 import type { AgentConfig } from '../types/index.js';
 
 // Zod schema for runtime validation
+// Family member schema
+const FamilyMemberSchema = z.object({
+  name: z.string(),
+  aliases: z.array(z.string()).optional(),
+  groupAliases: z.array(z.string()).optional(),
+  grade: z.string().optional(),
+  gradeAliases: z.array(z.string()).optional(),
+});
+
+// External calendar schema
+const ExternalCalendarSchema = z.object({
+  name: z.string(),
+  url: z.string(),
+  type: z.enum(['school', 'assignments', 'activities', 'other']),
+  enabled: z.boolean(),
+  syncFrequency: z.enum(['daily', 'weekly', 'monthly']),
+  filterByGrade: z.boolean().optional(),
+});
+
 const AgentConfigSchema = z.object({
   version: z.string(),
   createdAt: z.string(),
@@ -49,6 +68,11 @@ const AgentConfigSchema = z.object({
     calendarId: z.string(),
     timezone: z.string(),
   }),
+  family: z.object({
+    members: z.array(FamilyMemberSchema),
+    defaultAssignmentFallback: z.string().optional(),
+  }).optional(),
+  externalCalendars: z.array(ExternalCalendarSchema).optional(),
   invites: z.object({
     defaultGuests: z.array(z.string()),
     policy: z.enum(['always', 'conditional', 'manual']),
