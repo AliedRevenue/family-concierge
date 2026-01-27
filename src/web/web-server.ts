@@ -21,6 +21,12 @@ import { generateDashboardV2HTML } from './dashboard-v2.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Helper to safely extract string params (Express 5 types params as string | string[])
+function getParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] || '';
+  return value || '';
+}
+
 interface ApprovalSession {
   id: string;
   messageId: string;
@@ -237,7 +243,7 @@ export class WebServer {
     // API: Reclassify an item (e.g., mark as newsletter)
     this.app.post('/api/pending/:id/classify', (req: Request, res: Response): void => {
       try {
-        const { id } = req.params;
+        const id = getParam(req.params.id);
         const { category } = req.body;
 
         if (!category) {
@@ -268,7 +274,7 @@ export class WebServer {
     // Approve email via token
     this.app.get('/approve/:token', (req: Request, res: Response): void => {
       try {
-        const { token } = req.params;
+        const token = getParam(req.params.token);
         const approval = this.db.getPendingApprovalById(token);
 
         if (!approval) {
@@ -303,7 +309,7 @@ export class WebServer {
     // Reject email via token
     this.app.get('/reject/:token', (req: Request, res: Response): void => {
       try {
-        const { token } = req.params;
+        const token = getParam(req.params.token);
         const approval = this.db.getPendingApprovalById(token);
 
         if (!approval) {
@@ -386,7 +392,7 @@ export class WebServer {
     // Metrics API: Get discovery metrics for a pack
     this.app.get('/api/discovery-metrics/:packId', (req: Request, res: Response) => {
       try {
-        const { packId } = req.params;
+        const packId = getParam(req.params.packId);
 
         // Get latest run stats
         const runStats = this.db.getDiscoveryRunStats(packId, 1);
@@ -453,7 +459,7 @@ export class WebServer {
     // Category API: Get available categories and current preferences
     this.app.get('/api/categories/:packId', (req: Request, res: Response) => {
       try {
-        const { packId } = req.params;
+        const packId = getParam(req.params.packId);
 
         // Get saved preferences or defaults
         const saved = this.db.getCategoryPreferences(packId);
@@ -524,7 +530,7 @@ export class WebServer {
     // Category API: Save category preferences
     this.app.post('/api/categories/:packId', (req: Request, res: Response) => {
       try {
-        const { packId } = req.params;
+        const packId = getParam(req.params.packId);
         const { enabled, sensitivity } = req.body;
 
         console.log(`[API] POST /api/categories/${packId}`, { enabled, sensitivity });
@@ -677,7 +683,7 @@ export class WebServer {
     // POST /api/suggested-domains/:id/approve - Approve a domain suggestion
     this.app.post('/api/suggested-domains/:id/approve', async (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getParam(req.params.id);
 
         // Get the suggestion
         const suggestion = this.db.getSuggestedDomainById(id);
@@ -706,7 +712,7 @@ export class WebServer {
     // POST /api/suggested-domains/:id/reject - Reject a domain suggestion
     this.app.post('/api/suggested-domains/:id/reject', (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getParam(req.params.id);
         const { reason, permanent } = req.body;
 
         if (!reason) {
@@ -1197,7 +1203,7 @@ export class WebServer {
     // POST /api/catch-up/:id/read - Mark a newsletter as read
     this.app.post('/api/catch-up/:id/read', (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getParam(req.params.id);
         this.db.markAsRead(id, 'parent');
 
         console.log(`[API] Marked newsletter as read: ${id}`);
@@ -1271,7 +1277,7 @@ export class WebServer {
     // GET /api/email/:id/body - Get full email body for a pending approval
     this.app.get('/api/email/:id/body', (req: Request, res: Response): void => {
       try {
-        const { id } = req.params;
+        const id = getParam(req.params.id);
         const body = this.db.getEmailBody(id);
 
         if (!body) {
@@ -1293,7 +1299,7 @@ export class WebServer {
     // GET /view/:token - Read-only dashboard for family members
     this.app.get('/view/:token', (req: Request, res: Response): void => {
       try {
-        const { token } = req.params;
+        const token = getParam(req.params.token);
         const recipient = this.db.validateViewToken(token);
 
         if (!recipient) {
