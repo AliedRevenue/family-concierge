@@ -49,10 +49,15 @@ async function main(): Promise<void> {
 
   console.log('📦 Initializing database...');
   console.log('   DB PATH:', resolve(dbPath));
-  const db = new DatabaseClient(dbPath);
-  db.healCategoryPreferencesSchema(); // Auto-fix FK constraint if present
+
+  // Support Turso cloud DB in production
+  const dbUrl = process.env.TURSO_DATABASE_URL || dbPath;
+  const dbAuthToken = process.env.TURSO_AUTH_TOKEN;
+
+  const db = new DatabaseClient(dbUrl, dbAuthToken);
+  await db.healCategoryPreferencesSchema(); // Auto-fix FK constraint if present
   const migrationRunner = new MigrationRunner(db.getConnection());
-  migrationRunner.migrate();
+  await migrationRunner.migrate();
   migrationRunner.close();
   const logger = new Logger(db);
 
@@ -184,7 +189,7 @@ async function main(): Promise<void> {
     console.log(`   Emails Scanned: ${digest.stats.emailsScanned}\n`);
 
     // Get recipients from database (who have digest notifications enabled)
-    const recipients = db.getRecipientsByNotificationType('digests');
+    const recipients = await db.getRecipientsByNotificationType('digests');
 
     // Fallback to config if no database recipients set up yet
     if (recipients.length === 0) {
@@ -226,11 +231,11 @@ async function main(): Promise<void> {
     }
 
     // Check if item exists in pending_approvals
-    const pendingItem = db.getPendingApprovalById(itemId);
-    
+    const pendingItem = await db.getPendingApprovalById(itemId);
+
     if (pendingItem) {
       // Dismiss pending approval item
-      db.dismissItem(itemId, reason, {
+      await db.dismissItem(itemId, reason, {
         itemType: 'pending_approval',
         originalSubject: pendingItem.subject,
         originalFrom: pendingItem.from_email,
@@ -240,7 +245,7 @@ async function main(): Promise<void> {
       });
 
       // Delete from pending approvals
-      db.deletePendingApproval(itemId);
+      await db.deletePendingApproval(itemId);
 
       console.log(`\n⌀ Dismissed: ${pendingItem.subject}`);
       console.log(`   Reason: ${reason}`);
@@ -360,18 +365,18 @@ async function main(): Promise<void> {
         console.log(`   Config file: ${configPath}\n`);
         
         // Mark existing items as OUT_OF_SCOPE
-        const pendingItems = db.getPendingApprovals('school');
-        const matchingItems = pendingItems.filter((item: any) => 
+        const pendingItems = await db.getPendingApprovals('school');
+        const matchingItems = pendingItems.filter((item: any) =>
           item.subject?.toLowerCase().includes(keyword.toLowerCase()) ||
           item.snippet?.toLowerCase().includes(keyword.toLowerCase())
         );
-        
+
         if (matchingItems.length > 0) {
           console.log(`🔄 Updated ${matchingItems.length} pending item(s) to OUT_OF_SCOPE\n`);
-          matchingItems.forEach((item: any) => {
+          for (const item of matchingItems) {
             console.log(`  ⌀ ${item.subject}`);
             // Mark as dismissed with system reason
-            db.dismissItem(item.id, `Matched exclusion rule: "${keyword}"`, {
+            await db.dismissItem(item.id, `Matched exclusion rule: "${keyword}"`, {
               itemType: 'pending_approval',
               originalSubject: item.subject,
               originalFrom: item.from_email,
@@ -379,8 +384,8 @@ async function main(): Promise<void> {
               person: item.person,
               packId: item.pack_id,
             });
-            db.deletePendingApproval(item.id);
-          });
+            await db.deletePendingApproval(item.id);
+          }
         }
         console.log('');
       } else {
@@ -425,8 +430,8 @@ async function main(): Promise<void> {
 
     // Show deferred items
     console.log('\n⏳ DEFERRED ITEMS (need attention)');
-    const pendingItems = db.getPendingApprovals('school');
-    const personItems = pendingItems.filter((item: any) => 
+    const pendingItems = await db.getPendingApprovals('school');
+    const personItems = pendingItems.filter((item: any) =>
       item.person?.toLowerCase() === person.toLowerCase() && !item.approved
     );
 
@@ -447,7 +452,7 @@ async function main(): Promise<void> {
 
     // Show dismissed items (last 7 days)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const dismissedItems = db.getDismissedItemsByPerson(person.toLowerCase(), sevenDaysAgo);
+    const dismissedItems = await db.getDismissedItemsByPerson(person.toLowerCase(), sevenDaysAgo);
     
     console.log('\n⌀ DISMISSED THIS WEEK');
     if (dismissedItems.length === 0) {
@@ -518,7 +523,7 @@ async function main(): Promise<void> {
         
         for (const msgId of messageIds) {
           // Check if already processed
-          const existing = db.getProcessedMessage(msgId);
+          const existing = await db.getProcessedMessage(msgId);
           if (existing) {
             alreadyProcessed.push({ id: msgId });
           } else {

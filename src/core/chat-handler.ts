@@ -176,7 +176,7 @@ Guidelines:
     if (plan.searchLocal) {
       // Search local events
       if (plan.intent === 'find_event' || plan.intent === 'summarize') {
-        const allEvents = this.db.getAllEvents() as any[];
+        const allEvents = await this.db.getAllEvents() as any[];
 
         results.events = allEvents.filter((event: any) => {
           const eventIntent = typeof event.eventIntent === 'string'
@@ -223,12 +223,12 @@ Guidelines:
 
       // Search newsletters
       if (plan.intent === 'list_newsletters') {
-        results.newsletters = this.db.getNewsletters(10);
+        results.newsletters = await this.db.getNewsletters(10);
       }
 
       // Search pending emails
       if (plan.intent === 'search_emails' || plan.intent === 'general') {
-        const pending = this.db.getPendingApprovals('school');
+        const pending = await this.db.getPendingApprovals('school');
         results.emails = pending.filter(email => {
           const subject = (email.subject || '').toLowerCase();
           const snippet = (email.snippet || '').toLowerCase();

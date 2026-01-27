@@ -111,15 +111,15 @@ export class WebServer {
 
   private setupRoutes() {
     // Dashboard home
-    this.app.get('/', (req: Request, res: Response) => {
-      res.send(this.dashboardPage());
+    this.app.get('/', async (req: Request, res: Response) => {
+      res.send(await this.dashboardPage());
     });
 
     // API: Get pending emails
-    this.app.get('/api/pending', (_req: Request, res: Response) => {
+    this.app.get('/api/pending', async (_req: Request, res: Response) => {
       try {
         // Get pending approvals from database (default to 'school' pack for now)
-        const pending = this.db.getPendingApprovals('school');
+        const pending = await this.db.getPendingApprovals('school');
         
         // Format for dashboard display
         const formatted = pending.map((approval: any) => ({
@@ -145,9 +145,9 @@ export class WebServer {
     });
 
     // API: Get deferred items (pending without action, excluding newsletters)
-    this.app.get('/api/deferred', (_req: Request, res: Response) => {
+    this.app.get('/api/deferred', async (_req: Request, res: Response) => {
       try {
-        const pending = this.db.getPendingApprovals('school');
+        const pending = await this.db.getPendingApprovals('school');
         // Filter out newsletters - they belong in Weekly Catch-Up, not Needs Your Attention
         const deferred = pending.filter((item: any) =>
           !item.approved &&
@@ -185,10 +185,10 @@ export class WebServer {
     });
 
     // API: Get dismissed items (last 7 days)
-    this.app.get('/api/dismissed', (_req: Request, res: Response) => {
+    this.app.get('/api/dismissed', async (_req: Request, res: Response) => {
       try {
         const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-        const dismissed = this.db.getDismissedItems(sevenDaysAgo);
+        const dismissed = await this.db.getDismissedItems(sevenDaysAgo);
 
         const formatted = dismissed.map((item: any) => ({
           id: item.id,
@@ -207,7 +207,7 @@ export class WebServer {
     });
 
     // API: Dismiss an item
-    this.app.post('/api/dismiss', (req: Request, res: Response) => {
+    this.app.post('/api/dismiss', async (req: Request, res: Response) => {
       try {
         const { itemId, reason } = req.body;
 
@@ -216,13 +216,13 @@ export class WebServer {
         }
 
         // Get item details
-        const item = this.db.getPendingApprovalById(itemId);
+        const item = await this.db.getPendingApprovalById(itemId);
         if (!item) {
           return res.status(404).json({ error: 'Item not found' });
         }
 
         // Dismiss the item
-        this.db.dismissItem(itemId, reason, {
+        await this.db.dismissItem(itemId, reason, {
           itemType: 'pending_approval',
           originalSubject: item.subject,
           originalFrom: item.from_email,
@@ -232,7 +232,7 @@ export class WebServer {
         });
 
         // Delete from pending approvals
-        this.db.deletePendingApproval(itemId);
+        await this.db.deletePendingApproval(itemId);
 
         return res.json({ success: true, message: 'Item dismissed successfully' });
       } catch (error) {
@@ -241,7 +241,7 @@ export class WebServer {
     });
 
     // API: Reclassify an item (e.g., mark as newsletter)
-    this.app.post('/api/pending/:id/classify', (req: Request, res: Response): void => {
+    this.app.post('/api/pending/:id/classify', async (req: Request, res: Response): Promise<void> => {
       try {
         const id = getParam(req.params.id);
         const { category } = req.body;
@@ -252,17 +252,17 @@ export class WebServer {
         }
 
         // Get item details
-        const item = this.db.getPendingApprovalById(id);
+        const item = await this.db.getPendingApprovalById(id);
         if (!item) {
           res.status(404).json({ error: 'Item not found' });
           return;
         }
 
         // Update the category
-        const stmt = this.db.getConnection().prepare(`
-          UPDATE pending_approvals SET primary_category = ? WHERE id = ?
-        `);
-        stmt.run(category, id);
+        await this.db.execute(
+          'UPDATE pending_approvals SET primary_category = ? WHERE id = ?',
+          [category, id]
+        );
 
         res.json({ success: true, message: `Item reclassified as ${category}` });
       } catch (error) {
@@ -272,10 +272,10 @@ export class WebServer {
     });
 
     // Approve email via token
-    this.app.get('/approve/:token', (req: Request, res: Response): void => {
+    this.app.get('/approve/:token', async (req: Request, res: Response): Promise<void> => {
       try {
         const token = getParam(req.params.token);
-        const approval = this.db.getPendingApprovalById(token);
+        const approval = await this.db.getPendingApprovalById(token);
 
         if (!approval) {
           res.status(404).send(this.errorPage('Approval link expired or invalid'));
@@ -289,7 +289,7 @@ export class WebServer {
 
         // Mark as approved in database
         const now = new Date().toISOString();
-        this.db.updatePendingApproval(token, {
+        await this.db.updatePendingApproval(token, {
           approved: true,
           approvedAt: now,
           action: 'approve',
@@ -307,10 +307,10 @@ export class WebServer {
     });
 
     // Reject email via token
-    this.app.get('/reject/:token', (req: Request, res: Response): void => {
+    this.app.get('/reject/:token', async (req: Request, res: Response): Promise<void> => {
       try {
         const token = getParam(req.params.token);
-        const approval = this.db.getPendingApprovalById(token);
+        const approval = await this.db.getPendingApprovalById(token);
 
         if (!approval) {
           res.status(404).send(this.errorPage('Rejection link expired or invalid'));
@@ -324,7 +324,7 @@ export class WebServer {
 
         // Mark as rejected in database
         const now = new Date().toISOString();
-        this.db.updatePendingApproval(token, {
+        await this.db.updatePendingApproval(token, {
           approved: false,
           approvedAt: now,
           action: 'reject',
@@ -362,7 +362,7 @@ export class WebServer {
     });
 
     // Metrics API: Mark an email as false negative (missed by discovery)
-    this.app.post('/api/mark-missed', (req: Request, res: Response) => {
+    this.app.post('/api/mark-missed', async (req: Request, res: Response) => {
       try {
         const { messageId, packId, fromEmail, fromName, subject, snippet, reason } = req.body;
 
@@ -372,7 +372,7 @@ export class WebServer {
         }
 
         // Insert into discovery_false_negatives table
-        this.db.insertDiscoveryFalseNegative({
+        await this.db.insertDiscoveryFalseNegative({
           id: uuidv4(),
           messageId,
           packId,
@@ -390,16 +390,16 @@ export class WebServer {
     });
 
     // Metrics API: Get discovery metrics for a pack
-    this.app.get('/api/discovery-metrics/:packId', (req: Request, res: Response) => {
+    this.app.get('/api/discovery-metrics/:packId', async (req: Request, res: Response) => {
       try {
         const packId = getParam(req.params.packId);
 
         // Get latest run stats
-        const runStats = this.db.getDiscoveryRunStats(packId, 1);
+        const runStats = await this.db.getDiscoveryRunStats(packId, 1);
         const latestRun = runStats.length > 0 ? runStats[0] : null;
 
         // Get false negatives count
-        const falseNegatives = this.db.getDiscoveryFalseNegatives(packId);
+        const falseNegatives = await this.db.getDiscoveryFalseNegatives(packId);
 
         if (!latestRun) {
           res.json({
@@ -457,12 +457,12 @@ export class WebServer {
     });
 
     // Category API: Get available categories and current preferences
-    this.app.get('/api/categories/:packId', (req: Request, res: Response) => {
+    this.app.get('/api/categories/:packId', async (req: Request, res: Response) => {
       try {
         const packId = getParam(req.params.packId);
 
         // Get saved preferences or defaults
-        const saved = this.db.getCategoryPreferences(packId);
+        const saved = await this.db.getCategoryPreferences(packId);
         const currentPreferences = saved || DEFAULT_CATEGORY_PREFERENCES;
 
         // List of available categories with descriptions
@@ -528,7 +528,7 @@ export class WebServer {
     });
 
     // Category API: Save category preferences
-    this.app.post('/api/categories/:packId', (req: Request, res: Response) => {
+    this.app.post('/api/categories/:packId', async (req: Request, res: Response) => {
       try {
         const packId = getParam(req.params.packId);
         const { enabled, sensitivity } = req.body;
@@ -541,7 +541,7 @@ export class WebServer {
           return;
         }
 
-        this.db.saveCategoryPreferences(packId, { enabled, sensitivity });
+        await this.db.saveCategoryPreferences(packId, { enabled, sensitivity });
         console.log(`[API] Preferences saved for ${packId}`);
 
         res.json({
@@ -558,9 +558,9 @@ export class WebServer {
     // Recipient Management API
 
     // GET /api/recipients - List all recipients
-    this.app.get('/api/recipients', (_req: Request, res: Response) => {
+    this.app.get('/api/recipients', async (_req: Request, res: Response) => {
       try {
-        const recipients = this.db.getAllRecipients();
+        const recipients = await this.db.getAllRecipients();
         res.json(recipients);
       } catch (error) {
         console.error('[API] Error fetching recipients:', error);
@@ -569,7 +569,7 @@ export class WebServer {
     });
 
     // POST /api/recipients - Add new recipient
-    this.app.post('/api/recipients', (req: Request, res: Response) => {
+    this.app.post('/api/recipients', async (req: Request, res: Response) => {
       try {
         const { email, name, receiveDigests, receiveForwarding, receiveErrors, receiveApprovals } = req.body;
 
@@ -578,12 +578,12 @@ export class WebServer {
           return;
         }
 
-        if (this.db.recipientExists(email)) {
+        if (await this.db.recipientExists(email)) {
           res.status(400).json({ error: 'Recipient already exists' });
           return;
         }
 
-        this.db.addRecipient(email, name || '', {
+        await this.db.addRecipient(email, name || '', {
           receiveDigests: receiveDigests ?? true,
           receiveForwarding: receiveForwarding ?? true,
           receiveErrors: receiveErrors ?? true,
@@ -598,7 +598,7 @@ export class WebServer {
     });
 
     // PUT /api/recipients/:email - Update recipient preferences
-    this.app.put('/api/recipients/:email', (req: Request, res: Response) => {
+    this.app.put('/api/recipients/:email', async (req: Request, res: Response) => {
       try {
         const email = getParam(req.params.email);
         const { name, receiveDigests, receiveForwarding, receiveErrors, receiveApprovals } = req.body;
@@ -610,7 +610,7 @@ export class WebServer {
         if (receiveErrors !== undefined) preferences.receiveErrors = receiveErrors;
         if (receiveApprovals !== undefined) preferences.receiveApprovals = receiveApprovals;
 
-        this.db.updateRecipient(email, preferences);
+        await this.db.updateRecipient(email, preferences);
         res.json({ success: true, email });
       } catch (error) {
         console.error('[API] Error updating recipient:', error);
@@ -619,10 +619,10 @@ export class WebServer {
     });
 
     // DELETE /api/recipients/:email - Delete recipient
-    this.app.delete('/api/recipients/:email', (req: Request, res: Response) => {
+    this.app.delete('/api/recipients/:email', async (req: Request, res: Response) => {
       try {
         const email = getParam(req.params.email);
-        this.db.deleteRecipient(email);
+        await this.db.deleteRecipient(email);
         res.json({ success: true, email });
       } catch (error) {
         console.error('[API] Error deleting recipient:', error);
@@ -631,9 +631,9 @@ export class WebServer {
     });
 
     // POST /api/cache/clear - Clear summary cache
-    this.app.post('/api/cache/clear', (_req: Request, res: Response) => {
+    this.app.post('/api/cache/clear', async (_req: Request, res: Response) => {
       try {
-        this.db.invalidateSummaryCache();
+        await this.db.invalidateSummaryCache();
         console.log('[API] Summary cache cleared');
         res.json({ success: true, message: 'Summary cache cleared' });
       } catch (error) {
@@ -648,8 +648,8 @@ export class WebServer {
     });
 
     // GET /audit - Audit page (configuration verification and corrections)
-    this.app.get('/audit', (_req: Request, res: Response) => {
-      res.send(this.auditPage());
+    this.app.get('/audit', async (_req: Request, res: Response) => {
+      res.send(await this.auditPage());
     });
 
     // ========================================
@@ -657,10 +657,10 @@ export class WebServer {
     // ========================================
 
     // GET /api/suggested-domains - Get pending domain suggestions
-    this.app.get('/api/suggested-domains', (req: Request, res: Response) => {
+    this.app.get('/api/suggested-domains', async (req: Request, res: Response) => {
       try {
         const packId = (req.query.packId as string) || 'school';
-        const suggestions = this.db.getSuggestedDomains(packId, 'pending');
+        const suggestions = await this.db.getSuggestedDomains(packId, 'pending');
 
         const formatted = suggestions.map((s: any) => ({
           id: s.id,
@@ -686,13 +686,13 @@ export class WebServer {
         const id = getParam(req.params.id);
 
         // Get the suggestion
-        const suggestion = this.db.getSuggestedDomainById(id);
+        const suggestion = await this.db.getSuggestedDomainById(id);
         if (!suggestion) {
           return res.status(404).json({ error: 'Suggestion not found' });
         }
 
         // Mark as approved in database
-        this.db.approveSuggestedDomain(id);
+        await this.db.approveSuggestedDomain(id);
 
         // Note: Config update would be handled by DomainExplorer.approveDomain()
         // For now, just update the database status
@@ -710,7 +710,7 @@ export class WebServer {
     });
 
     // POST /api/suggested-domains/:id/reject - Reject a domain suggestion
-    this.app.post('/api/suggested-domains/:id/reject', (req: Request, res: Response) => {
+    this.app.post('/api/suggested-domains/:id/reject', async (req: Request, res: Response) => {
       try {
         const id = getParam(req.params.id);
         const { reason, permanent } = req.body;
@@ -720,13 +720,13 @@ export class WebServer {
         }
 
         // Get the suggestion first
-        const suggestion = this.db.getSuggestedDomainById(id);
+        const suggestion = await this.db.getSuggestedDomainById(id);
         if (!suggestion) {
           return res.status(404).json({ error: 'Suggestion not found' });
         }
 
         // Reject with reason
-        this.db.rejectSuggestedDomain(id, reason, permanent ?? true);
+        await this.db.rejectSuggestedDomain(id, reason, permanent ?? true);
 
         console.log(`[API] Domain rejected: ${suggestion.domain} - Reason: ${reason}`);
 
@@ -742,10 +742,10 @@ export class WebServer {
     });
 
     // GET /api/rejected-domains - Get rejected domains (for audit)
-    this.app.get('/api/rejected-domains', (req: Request, res: Response) => {
+    this.app.get('/api/rejected-domains', async (req: Request, res: Response) => {
       try {
         const packId = (req.query.packId as string) || 'school';
-        const rejected = this.db.getRejectedDomains(packId);
+        const rejected = await this.db.getRejectedDomains(packId);
         res.json(rejected);
       } catch (error) {
         console.error('[API] Error fetching rejected domains:', error);
@@ -758,10 +758,10 @@ export class WebServer {
     // ========================================
 
     // GET /api/upcoming - Get upcoming events and emails worth reading
-    this.app.get('/api/upcoming', (req: Request, res: Response) => {
+    this.app.get('/api/upcoming', async (req: Request, res: Response) => {
       try {
         const days = parseInt(req.query.days as string) || 14;
-        const summary = this.digestBuilder.getUpcomingSummary(days);
+        const summary = await this.digestBuilder.getUpcomingSummary(days);
         res.json(summary);
       } catch (error) {
         console.error('[API] Error fetching upcoming summary:', error);
@@ -775,11 +775,12 @@ export class WebServer {
         const days = parseInt(req.body.days as string) || 14;
 
         // Generate digest content
-        const htmlContent = this.digestBuilder.generateUpcomingDigestHTML(days, 'http://localhost:5000');
-        const textContent = this.digestBuilder.generateUpcomingDigestText(days, 'http://localhost:5000');
+        const htmlContent = await this.digestBuilder.generateUpcomingDigestHTML(days, 'http://localhost:5000');
+        const textContent = await this.digestBuilder.generateUpcomingDigestText(days, 'http://localhost:5000');
 
         // Get recipients
-        const recipients = this.db.getAllRecipients().filter((r: any) => r.is_active && r.receive_digests);
+        const allRecipients = await this.db.getAllRecipients();
+        const recipients = allRecipients.filter((r: any) => r.is_active && r.receive_digests);
 
         if (recipients.length === 0) {
           return res.status(400).json({ error: 'No active recipients configured' });
@@ -822,7 +823,7 @@ export class WebServer {
       try {
         const packId = req.query.packId as string | undefined;
         const person = req.query.person as string | undefined;
-        const items = this.db.getObligationItems(packId, person);
+        const items = await this.db.getUpcomingObligations(packId, person);
 
         // Format items for display
         const formatted = items.map((item: any) => ({
@@ -875,7 +876,7 @@ export class WebServer {
       try {
         const packId = req.query.packId as string | undefined;
         const person = req.query.person as string | undefined;
-        const items = this.db.getTaskItems(packId, person);
+        const items = await this.db.getTaskItems(packId, person);
 
         // Format items for display
         const formatted = items.map((item: any) => ({
@@ -925,8 +926,9 @@ export class WebServer {
     this.app.get('/api/dashboard/announcements', async (req: Request, res: Response) => {
       try {
         const packId = req.query.packId as string | undefined;
-        const includeRead = req.query.includeRead === 'true';
-        const items = this.db.getAnnouncementItems(packId, includeRead);
+        const _includeRead = req.query.includeRead === 'true';
+        // Use getUpdatesItems which includes announcements
+        const items = await this.db.getUpdatesItems(packId);
 
         // Format items for display
         const formatted = items.map((item: any) => ({
@@ -979,24 +981,25 @@ export class WebServer {
     this.app.get('/api/item/:id', async (req: Request, res: Response) => {
       console.log(`[API] GET /api/item/${req.params.id} - handler entered`);
       try {
-        const itemId = req.params.id;
-        const item = this.db.getConnection().prepare(`
+        const itemId = getParam(req.params.id);
+        const result = await this.db.execute(`
           SELECT
-            pa.id,
-            pa.message_id,
-            pa.pack_id,
-            pa.subject,
-            pa.from_name,
-            pa.from_email,
-            pa.snippet,
-            pa.person,
-            pa.created_at,
-            pa.item_type,
-            pa.obligation_date,
-            COALESCE(pa.email_body_html, pa.email_body_text) as email_body
-          FROM pending_approvals pa
-          WHERE pa.id = ?
-        `).get(itemId) as any;
+            id,
+            message_id,
+            pack_id,
+            subject,
+            from_name,
+            from_email,
+            snippet,
+            person,
+            created_at,
+            item_type,
+            obligation_date,
+            COALESCE(email_body_html, email_body_text) as email_body
+          FROM pending_approvals
+          WHERE id = ?
+        `, [itemId]);
+        const item = result.rows[0] as any;
 
         if (!item) {
           res.status(404).json({ error: 'Item not found' });
@@ -1019,11 +1022,10 @@ export class WebServer {
 
               // Cache the body back to the database for future requests
               if (emailBody) {
-                this.db.getConnection().prepare(`
-                  UPDATE pending_approvals
-                  SET email_body_html = ?, email_body_text = ?
-                  WHERE id = ?
-                `).run(body.html || null, body.text || null, itemId);
+                await this.db.execute(
+                  `UPDATE pending_approvals SET email_body_html = ?, email_body_text = ? WHERE id = ?`,
+                  [body.html || null, body.text || null, itemId]
+                );
                 console.log(`[API] Cached email body for item ${itemId}`);
               }
             }
@@ -1058,8 +1060,9 @@ export class WebServer {
     this.app.get('/api/dashboard/catchup', async (req: Request, res: Response) => {
       try {
         const packId = req.query.packId as string | undefined;
-        const daysBack = parseInt(req.query.daysBack as string) || 7;
-        const items = this.db.getPastItems(packId, daysBack);
+        const _daysBack = parseInt(req.query.daysBack as string) || 7;
+        // Use getUpdatesItems which includes past items
+        const items = await this.db.getUpdatesItems(packId);
 
         // Format items for display
         const formatted = items.map((item: any) => ({
@@ -1113,7 +1116,7 @@ export class WebServer {
       try {
         const packId = req.query.packId as string | undefined;
         const person = req.query.person as string | undefined;
-        const items = this.db.getUpdatesItems(packId, person);
+        const items = await this.db.getUpdatesItems(packId, person);
 
         // Format items for display
         const formatted = items.map((item: any) => ({
@@ -1166,14 +1169,14 @@ export class WebServer {
     // ========================================
 
     // GET /api/catch-up - Get newsletters and class updates
-    this.app.get('/api/catch-up', (req: Request, res: Response) => {
+    this.app.get('/api/catch-up', async (req: Request, res: Response) => {
       try {
         const showRead = req.query.showRead === 'true';
         const limit = parseInt(req.query.limit as string) || 20;
 
         const newsletters = showRead
-          ? this.db.getNewsletters(limit)
-          : this.db.getUnreadNewsletters(limit);
+          ? await this.db.getNewsletters(limit)
+          : await this.db.getUnreadNewsletters(limit);
 
         const formatted = newsletters.map((n: any) => ({
           id: n.id,
@@ -1201,10 +1204,10 @@ export class WebServer {
     });
 
     // POST /api/catch-up/:id/read - Mark a newsletter as read
-    this.app.post('/api/catch-up/:id/read', (req: Request, res: Response) => {
+    this.app.post('/api/catch-up/:id/read', async (req: Request, res: Response) => {
       try {
         const id = getParam(req.params.id);
-        this.db.markAsRead(id, 'parent');
+        await this.db.markAsRead(id, 'parent');
 
         console.log(`[API] Marked newsletter as read: ${id}`);
         res.json({ success: true, id });
@@ -1215,13 +1218,13 @@ export class WebServer {
     });
 
     // POST /api/catch-up/mark-all-read - Mark all newsletters as read
-    this.app.post('/api/catch-up/mark-all-read', (req: Request, res: Response) => {
+    this.app.post('/api/catch-up/mark-all-read', async (req: Request, res: Response) => {
       try {
-        const newsletters = this.db.getUnreadNewsletters(100);
+        const newsletters = await this.db.getUnreadNewsletters(100);
         let count = 0;
 
         for (const n of newsletters) {
-          this.db.markAsRead(n.id, 'parent');
+          await this.db.markAsRead(n.id, 'parent');
           count++;
         }
 
@@ -1275,10 +1278,10 @@ export class WebServer {
     });
 
     // GET /api/email/:id/body - Get full email body for a pending approval
-    this.app.get('/api/email/:id/body', (req: Request, res: Response): void => {
+    this.app.get('/api/email/:id/body', async (req: Request, res: Response): Promise<void> => {
       try {
         const id = getParam(req.params.id);
-        const body = this.db.getEmailBody(id);
+        const body = await this.db.getEmailBody(id);
 
         if (!body) {
           res.status(404).json({ error: 'Email not found' });
@@ -1297,10 +1300,10 @@ export class WebServer {
     });
 
     // GET /view/:token - Read-only dashboard for family members
-    this.app.get('/view/:token', (req: Request, res: Response): void => {
+    this.app.get('/view/:token', async (req: Request, res: Response): Promise<void> => {
       try {
         const token = getParam(req.params.token);
-        const recipient = this.db.validateViewToken(token);
+        const recipient = await this.db.validateViewToken(token);
 
         if (!recipient) {
           res.status(403).send(`
@@ -1326,7 +1329,7 @@ export class WebServer {
     });
 
     // POST /api/view-token - Create a view token for a recipient (admin only)
-    this.app.post('/api/view-token', (req: Request, res: Response): void => {
+    this.app.post('/api/view-token', async (req: Request, res: Response): Promise<void> => {
       try {
         const { email, expiresInDays = 30 } = req.body;
 
@@ -1336,14 +1339,14 @@ export class WebServer {
         }
 
         // Find or create recipient
-        const recipient = this.db.getRecipientByEmail(email);
+        const recipient = await this.db.getRecipientByEmail(email);
         if (!recipient) {
           res.status(404).json({ error: 'Recipient not found. Add them first via /api/recipients' });
           return;
         }
 
         // Create view token
-        const token = this.db.createViewToken(recipient.id, expiresInDays);
+        const token = await this.db.createViewToken(recipient.id, expiresInDays);
         const viewUrl = `${req.protocol}://${req.get('host')}/view/${token}`;
 
         res.json({
@@ -1426,9 +1429,9 @@ export class WebServer {
     return this.approvalSessions.get(token);
   }
 
-  private dashboardPage(): string {
+  private async dashboardPage(): Promise<string> {
     // Get family members from config
-    const configVersion = this.db.getLatestConfig();
+    const configVersion = await this.db.getLatestConfig();
     const familyMembers = configVersion?.config?.family?.members || [
       { name: 'Colin' },
       { name: 'Henry' }
@@ -3533,8 +3536,8 @@ export class WebServer {
     `;
   }
 
-  private auditPage(): string {
-    const configVersion = this.db.getLatestConfig();
+  private async auditPage(): Promise<string> {
+    const configVersion = await this.db.getLatestConfig();
     const config = configVersion?.config;
     const packs = config?.packs || [];
     

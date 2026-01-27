@@ -69,24 +69,22 @@ export class Logger {
   ): void {
     this.winston.log(level, `[${module}] ${action}`, details);
 
-    // Also write to audit_logs if DB is available
+    // Also write to audit_logs if DB is available (fire-and-forget async)
     if (this.db) {
-      try {
-        const auditLog: AuditLog = {
-          timestamp: new Date().toISOString(),
-          level,
-          module,
-          action,
-          details,
-          messageId: details.messageId as string | undefined,
-          eventFingerprint: details.eventFingerprint as string | undefined,
-          userId: details.userId as string | undefined,
-        };
-        this.db.insertAuditLog(auditLog);
-      } catch (err) {
+      const auditLog: AuditLog = {
+        timestamp: new Date().toISOString(),
+        level,
+        module,
+        action,
+        details,
+        messageId: details.messageId as string | undefined,
+        eventFingerprint: details.eventFingerprint as string | undefined,
+        userId: details.userId as string | undefined,
+      };
+      this.db.insertAuditLog(auditLog).catch((err) => {
         // Fallback to console if DB write fails
         this.winston.error('Failed to write audit log to database', { error: err });
-      }
+      });
     }
   }
 }

@@ -315,18 +315,20 @@ Only include events that are actually relevant. If an event mentions a specific 
 
       try {
         // Check if we've already processed this event
-        const existing = this.db.getConnection().prepare(
-          'SELECT id FROM ics_calendar_events WHERE uid = ?'
-        ).get(event.uid);
+        const existingResult = await this.db.execute(
+          'SELECT id FROM ics_calendar_events WHERE uid = ?',
+          [event.uid]
+        );
+        const existing = existingResult.rows[0];
 
         if (existing) {
           // Update existing event
-          this.db.getConnection().prepare(`
+          await this.db.execute(`
             UPDATE ics_calendar_events
             SET summary = ?, description = ?, location = ?, start_date = ?, end_date = ?,
                 all_day = ?, relevant_to = ?, relevance_reason = ?, updated_at = datetime('now')
             WHERE uid = ?
-          `).run(
+          `, [
             event.summary,
             event.description || null,
             event.location || null,
@@ -336,15 +338,15 @@ Only include events that are actually relevant. If an event mentions a specific 
             JSON.stringify(event.relevantTo),
             event.relevanceReason,
             event.uid
-          );
+          ]);
         } else {
           // Insert new event
-          this.db.getConnection().prepare(`
+          await this.db.execute(`
             INSERT INTO ics_calendar_events
             (uid, summary, description, location, start_date, end_date, all_day,
              source_calendar, relevant_to, relevance_reason, should_sync, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-          `).run(
+          `, [
             event.uid,
             event.summary,
             event.description || null,
@@ -356,7 +358,7 @@ Only include events that are actually relevant. If an event mentions a specific 
             JSON.stringify(event.relevantTo),
             event.relevanceReason,
             event.shouldSync ? 1 : 0
-          );
+          ]);
           synced++;
         }
       } catch (error) {

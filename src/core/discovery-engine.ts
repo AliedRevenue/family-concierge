@@ -77,7 +77,7 @@ export class DiscoveryEngine {
       },
     };
 
-    this.db.insertDiscoverySession(session);
+    await this.db.insertDiscoverySession(session);
 
     this.logger.info('DiscoveryEngine', 'discovery_started', {
       sessionId,
@@ -317,7 +317,7 @@ export class DiscoveryEngine {
             console.log(`   [${msgNum}/${totalMsgs}] before insertPendingApproval`);
             const tDb = Date.now();
 
-            this.db.insertPendingApproval({
+            await this.db.insertPendingApproval({
               id: evidenceId,
               messageId,
               packId: pack.id,
@@ -393,7 +393,7 @@ export class DiscoveryEngine {
       session.completedAt = new Date().toISOString();
       session.status = 'completed';
 
-      this.db.updateDiscoverySession(sessionId, session);
+      await this.db.updateDiscoverySession(sessionId, session);
 
       // Log summary
       console.log(`\n📊 Discovery Summary:`);
@@ -424,7 +424,7 @@ export class DiscoveryEngine {
       return session;
     } catch (error) {
       session.status = 'failed';
-      this.db.updateDiscoverySession(sessionId, { status: 'failed' });
+      await this.db.updateDiscoverySession(sessionId, { status: 'failed' });
 
       this.logger.error('DiscoveryEngine', 'discovery_failed', { sessionId }, error as Error);
 
@@ -829,7 +829,7 @@ export class DiscoveryEngine {
     }
 
     // Insert run stats
-    this.db.insertDiscoveryRunStats(runStats);
+    await this.db.insertDiscoveryRunStats(runStats);
 
     // Sample rejected emails (those that didn't meet threshold)
     await this.sampleRejectedEmails(sessionId, packId, flaggedScores, rejectionReasons);
@@ -913,7 +913,7 @@ export class DiscoveryEngine {
         const rejectionReason = reasons[0];
 
         // Insert sample (expires in 30 days)
-        this.db.insertDiscoveryRejectedSample({
+        await this.db.insertDiscoveryRejectedSample({
           id: uuidv4(),
           sessionId,
           messageId,

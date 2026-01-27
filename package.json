@@ -28,7 +28,7 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
-    "better-sqlite3": "^11.6.0",
+    "@libsql/client": "^0.17.0",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "dotenv": "^16.4.7",
@@ -42,7 +42,6 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
     "@types/express": "^5.0.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.2",

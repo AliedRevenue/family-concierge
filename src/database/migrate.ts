@@ -1,9 +1,10 @@
 /**
  * Database Migration Runner
  * Applies SQL migrations in order and tracks applied versions
+ * Updated for libSQL/Turso async API
  */
 
-import Database from 'better-sqlite3';
+import { Client } from '@libsql/client';
 import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -18,38 +19,24 @@ interface Migration {
 }
 
 export class MigrationRunner {
-  private db: Database.Database;
+  private client: Client;
   private migrationsPath: string;
-  private ownsConnection: boolean; // Track if we created this connection
 
-  constructor(databasePath: string, migrationsPath?: string);
-  constructor(db: Database.Database, migrationsPath?: string);
-  constructor(dbOrPath: string | Database.Database, migrationsPath?: string) {
-    if (typeof dbOrPath === 'string') {
-      // Created our own connection
-      this.db = new Database(dbOrPath);
-      this.db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better concurrency
-      this.db.pragma('foreign_keys = ON'); // Enforce foreign key constraints
-      this.ownsConnection = true;
-    } else {
-      // Using provided connection
-      this.db = dbOrPath;
-      this.ownsConnection = false;
-    }
-    
+  constructor(client: Client, migrationsPath?: string) {
+    this.client = client;
     this.migrationsPath = migrationsPath || join(__dirname, '../../migrations');
   }
 
   /**
    * Run all pending migrations
    */
-  public migrate(): void {
+  public async migrate(): Promise<void> {
     console.log('Starting database migration...');
 
     // Ensure schema_migrations table exists
-    this.ensureMigrationsTable();
+    await this.ensureMigrationsTable();
 
-    const appliedVersions = this.getAppliedVersions();
+    const appliedVersions = await this.getAppliedVersions();
     const pendingMigrations = this.getPendingMigrations(appliedVersions);
 
     if (pendingMigrations.length === 0) {
@@ -60,7 +47,7 @@ export class MigrationRunner {
     console.log(`Found ${pendingMigrations.length} pending migration(s)`);
 
     for (const migration of pendingMigrations) {
-      this.applyMigration(migration);
+      await this.applyMigration(migration);
     }
 
     console.log('✓ All migrations completed successfully');
@@ -69,10 +56,10 @@ export class MigrationRunner {
   /**
    * Rollback to a specific version (for development)
    */
-  public rollbackTo(version: number): void {
+  public async rollbackTo(version: number): Promise<void> {
     console.warn(`⚠️  Rollback to version ${version} - this may cause data loss`);
-    
-    const appliedVersions = this.getAppliedVersions();
+
+    const appliedVersions = await this.getAppliedVersions();
     const toRollback = appliedVersions.filter((v) => v > version).sort((a, b) => b - a);
 
     if (toRollback.length === 0) {
@@ -83,19 +70,25 @@ export class MigrationRunner {
     // For v1, we don't have rollback SQL files
     // This is a destructive operation: drop all tables and re-migrate
     console.warn('⚠️  Full rollback: dropping all tables...');
-    
-    this.db.exec('DROP TABLE IF EXISTS pending_approvals');
-    this.db.exec('DROP TABLE IF EXISTS approval_tokens');
-    this.db.exec('DROP TABLE IF EXISTS audit_logs');
-    this.db.exec('DROP TABLE IF EXISTS exceptions');
-    this.db.exec('DROP TABLE IF EXISTS discovery_evidence');
-    this.db.exec('DROP TABLE IF EXISTS discovery_sessions');
-    this.db.exec('DROP TABLE IF EXISTS config_versions');
-    this.db.exec('DROP TABLE IF EXISTS manual_edit_flags');
-    this.db.exec('DROP TABLE IF EXISTS calendar_operations');
-    this.db.exec('DROP TABLE IF EXISTS events');
-    this.db.exec('DROP TABLE IF EXISTS processed_messages');
-    this.db.exec('DROP TABLE IF EXISTS schema_migrations');
+
+    const tables = [
+      'pending_approvals',
+      'approval_tokens',
+      'audit_logs',
+      'exceptions',
+      'discovery_evidence',
+      'discovery_sessions',
+      'config_versions',
+      'manual_edit_flags',
+      'calendar_operations',
+      'events',
+      'processed_messages',
+      'schema_migrations',
+    ];
+
+    for (const table of tables) {
+      await this.client.execute(`DROP TABLE IF EXISTS ${table}`);
+    }
 
     console.log('✓ All tables dropped. Run migrate() to reapply migrations.');
   }
@@ -103,22 +96,20 @@ export class MigrationRunner {
   /**
    * Get current schema version
    */
-  public getCurrentVersion(): number {
-    const versions = this.getAppliedVersions();
+  public async getCurrentVersion(): Promise<number> {
+    const versions = await this.getAppliedVersions();
     return versions.length > 0 ? Math.max(...versions) : 0;
   }
 
   /**
-   * Close database connection (only if we created it)
+   * Close database connection (no-op for libSQL)
    */
   public close(): void {
-    if (this.ownsConnection) {
-      this.db.close();
-    }
+    // libSQL client doesn't need explicit close
   }
 
-  private ensureMigrationsTable(): void {
-    this.db.exec(`
+  private async ensureMigrationsTable(): Promise<void> {
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -127,19 +118,27 @@ export class MigrationRunner {
     `);
   }
 
-  private getAppliedVersions(): number[] {
+  private async getAppliedVersions(): Promise<number[]> {
     try {
-      const rows = this.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all();
-      return rows.map((row: any) => row.version);
+      const result = await this.client.execute(
+        'SELECT version FROM schema_migrations ORDER BY version'
+      );
+      return result.rows.map((row: any) => row.version as number);
     } catch (error) {
       return [];
     }
   }
 
   private getPendingMigrations(appliedVersions: number[]): Migration[] {
-    const files = readdirSync(this.migrationsPath)
-      .filter((f) => f.endsWith('.sql'))
-      .sort();
+    let files: string[];
+    try {
+      files = readdirSync(this.migrationsPath)
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
+    } catch (error) {
+      console.warn('⚠️  Migrations directory not found:', this.migrationsPath);
+      return [];
+    }
 
     const migrations: Migration[] = [];
 
@@ -162,27 +161,34 @@ export class MigrationRunner {
     return migrations.sort((a, b) => a.version - b.version);
   }
 
-  private applyMigration(migration: Migration): void {
+  private async applyMigration(migration: Migration): Promise<void> {
     console.log(`  Applying migration ${migration.version}: ${migration.name}...`);
 
-    const transaction = this.db.transaction(() => {
-      // Execute migration SQL
-      this.db.exec(migration.sql);
+    try {
+      // Split migration SQL into statements and execute each
+      // libSQL doesn't support multiple statements in a single execute
+      const statements = migration.sql
+        .split(';')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0 && !s.startsWith('--'));
+
+      for (const statement of statements) {
+        await this.client.execute(statement);
+      }
 
       // Record migration (skip if already recorded by migration itself)
-      const exists = this.db
-        .prepare('SELECT 1 FROM schema_migrations WHERE version = ?')
-        .get(migration.version);
+      const exists = await this.client.execute({
+        sql: 'SELECT 1 FROM schema_migrations WHERE version = ?',
+        args: [migration.version],
+      });
 
-      if (!exists) {
-        this.db
-          .prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)')
-          .run(migration.version, migration.name);
+      if (exists.rows.length === 0) {
+        await this.client.execute({
+          sql: 'INSERT INTO schema_migrations (version, name) VALUES (?, ?)',
+          args: [migration.version, migration.name],
+        });
       }
-    });
 
-    try {
-      transaction();
       console.log(`  ✓ Migration ${migration.version} applied successfully`);
     } catch (error) {
       console.error(`  ✗ Migration ${migration.version} failed:`, error);
@@ -193,19 +199,29 @@ export class MigrationRunner {
 
 // CLI runner
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const command = process.argv[2] || 'migrate';
-  const dbPath = process.env.DATABASE_PATH || './data/fca.db';
+  const { createClient } = await import('@libsql/client');
 
-  const runner = new MigrationRunner(dbPath);
+  const command = process.argv[2] || 'migrate';
+  const dbPath = process.env.TURSO_DATABASE_URL || process.env.DATABASE_PATH || './data/fca.db';
+  const authToken = process.env.TURSO_AUTH_TOKEN;
+
+  // Determine if it's a local file or Turso URL
+  const isLocalFile = !dbPath.startsWith('libsql://') && !dbPath.startsWith('https://');
+  const client = createClient({
+    url: isLocalFile ? `file:${dbPath}` : dbPath,
+    authToken,
+  });
+
+  const runner = new MigrationRunner(client);
 
   try {
     switch (command) {
       case 'migrate':
-        runner.migrate();
-        console.log(`Current schema version: ${runner.getCurrentVersion()}`);
+        await runner.migrate();
+        console.log(`Current schema version: ${await runner.getCurrentVersion()}`);
         break;
       case 'version':
-        console.log(`Current schema version: ${runner.getCurrentVersion()}`);
+        console.log(`Current schema version: ${await runner.getCurrentVersion()}`);
         break;
       case 'rollback':
         const version = parseInt(process.argv[3], 10);
@@ -213,7 +229,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           console.error('Usage: npm run migrate rollback <version>');
           process.exit(1);
         }
-        runner.rollbackTo(version);
+        await runner.rollbackTo(version);
         break;
       default:
         console.error(`Unknown command: ${command}`);

@@ -43,7 +43,7 @@ export class DomainExplorer {
     const startTime = Date.now();
 
     // Record run start
-    this.db.insertExplorationRun({
+    await this.db.insertExplorationRun({
       id: runId,
       packId: config.packId,
       runAt: new Date().toISOString(),
@@ -72,7 +72,7 @@ export class DomainExplorer {
       );
 
       // Filter to suggestions
-      const suggestions = this.filterToSuggestions(
+      const suggestions = await this.filterToSuggestions(
         domainStats,
         config.minEmailsForSuggestion,
         config.minConfidence,
@@ -81,11 +81,11 @@ export class DomainExplorer {
 
       // Persist suggestions
       for (const suggestion of suggestions) {
-        this.persistSuggestion(config.packId, suggestion);
+        await this.persistSuggestion(config.packId, suggestion);
       }
 
       // Update run stats
-      this.db.updateExplorationRun(runId, {
+      await this.db.updateExplorationRun(runId, {
         status: 'completed',
         emailsScanned: messageIds.length,
         newDomainsFound: domainStats.size,
@@ -103,7 +103,7 @@ export class DomainExplorer {
 
       return suggestions;
     } catch (error) {
-      this.db.updateExplorationRun(runId, {
+      await this.db.updateExplorationRun(runId, {
         status: 'failed',
         error: (error as Error).message,
         durationMs: Date.now() - startTime,
@@ -158,7 +158,7 @@ export class DomainExplorer {
       if (this.isWatchedDomain(domain, watchedDomains)) continue;
 
       // Skip if rejected
-      if (this.db.isRejectedDomain(packId, domain)) continue;
+      if (await this.db.isRejectedDomain(packId, domain)) continue;
 
       // Find which keywords matched
       const text = `${from} ${subject} ${message.snippet || ''}`.toLowerCase();
@@ -192,12 +192,12 @@ export class DomainExplorer {
   /**
    * Filter domains to actionable suggestions
    */
-  private filterToSuggestions(
+  private async filterToSuggestions(
     domainStats: Map<string, DomainStats>,
     minEmails: number,
     minConfidence: number,
     packId: string
-  ): DomainSuggestion[] {
+  ): Promise<DomainSuggestion[]> {
     const suggestions: DomainSuggestion[] = [];
 
     for (const [domain, stats] of domainStats.entries()) {
@@ -209,10 +209,10 @@ export class DomainExplorer {
       if (confidence < minConfidence) continue;
 
       // Skip if already suggested and pending
-      const existing = this.db.getSuggestedDomainByDomain(packId, domain);
+      const existing = await this.db.getSuggestedDomainByDomain(packId, domain);
       if (existing && existing.status === 'pending') {
         // Update existing suggestion with new data
-        this.db.updateSuggestedDomain(existing.id, {
+        await this.db.updateSuggestedDomain(existing.id, {
           emailCount: stats.emailCount,
           matchedKeywords: Array.from(stats.matchedKeywords),
           evidenceMessageIds: stats.messageIds.slice(0, 5),
@@ -258,12 +258,12 @@ export class DomainExplorer {
   /**
    * Persist a suggestion to database
    */
-  private persistSuggestion(packId: string, suggestion: DomainSuggestion): void {
-    const existing = this.db.getSuggestedDomainByDomain(packId, suggestion.domain);
+  private async persistSuggestion(packId: string, suggestion: DomainSuggestion): Promise<void> {
+    const existing = await this.db.getSuggestedDomainByDomain(packId, suggestion.domain);
 
     if (existing) {
       // Update existing (shouldn't happen due to filter, but safe)
-      this.db.updateSuggestedDomain(existing.id, {
+      await this.db.updateSuggestedDomain(existing.id, {
         emailCount: suggestion.emailCount,
         matchedKeywords: suggestion.matchedKeywords,
         evidenceMessageIds: suggestion.evidenceMessageIds,
@@ -273,7 +273,7 @@ export class DomainExplorer {
       });
     } else {
       // Insert new
-      this.db.insertSuggestedDomain({
+      await this.db.insertSuggestedDomain({
         id: uuid(),
         packId,
         domain: suggestion.domain,
@@ -290,7 +290,7 @@ export class DomainExplorer {
    * Approve a suggested domain - adds to config
    */
   async approveDomain(suggestionId: string): Promise<boolean> {
-    const suggestion = this.db.getSuggestedDomainById(suggestionId);
+    const suggestion = await this.db.getSuggestedDomainById(suggestionId);
     if (!suggestion) {
       this.logger.warn('DomainExplorer', 'approve_failed_not_found', { suggestionId });
       return false;
@@ -303,7 +303,7 @@ export class DomainExplorer {
     );
 
     if (success) {
-      this.db.approveSuggestedDomain(suggestionId);
+      await this.db.approveSuggestedDomain(suggestionId);
       this.logger.info('DomainExplorer', 'domain_approved', {
         domain: suggestion.domain,
         packId: suggestion.pack_id,
@@ -321,14 +321,14 @@ export class DomainExplorer {
   /**
    * Reject a suggested domain
    */
-  rejectDomain(suggestionId: string, reason: string, permanent: boolean = true): void {
-    const suggestion = this.db.getSuggestedDomainById(suggestionId);
+  async rejectDomain(suggestionId: string, reason: string, permanent: boolean = true): Promise<void> {
+    const suggestion = await this.db.getSuggestedDomainById(suggestionId);
     if (!suggestion) {
       this.logger.warn('DomainExplorer', 'reject_failed_not_found', { suggestionId });
       return;
     }
 
-    this.db.rejectSuggestedDomain(suggestionId, reason, permanent);
+    await this.db.rejectSuggestedDomain(suggestionId, reason, permanent);
 
     this.logger.info('DomainExplorer', 'domain_rejected', {
       domain: suggestion.domain,
@@ -341,8 +341,8 @@ export class DomainExplorer {
   /**
    * Get pending suggestions for a pack
    */
-  getPendingSuggestions(packId: string): any[] {
-    return this.db.getSuggestedDomains(packId, 'pending');
+  async getPendingSuggestions(packId: string): Promise<any[]> {
+    return await this.db.getSuggestedDomains(packId, 'pending');
   }
 
   // Helper methods

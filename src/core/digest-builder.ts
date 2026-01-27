@@ -29,17 +29,17 @@ export class DigestBuilder {
     const generatedAt = new Date().toISOString();
 
     // Query database for events in period
-    const createdEvents = this.getEventsByStatusAndPeriod('created', startDate, endDate);
-    const pendingEvents = this.getEventsByStatusAndPeriod('pending_approval', startDate, endDate);
-    const failedEvents = this.getEventsByStatusAndPeriod('failed', startDate, endDate);
-    const forwardedMessages = this.getForwardedMessagesInPeriod(startDate, endDate);
-    
+    const createdEvents = await this.getEventsByStatusAndPeriod('created', startDate, endDate);
+    const pendingEvents = await this.getEventsByStatusAndPeriod('pending_approval', startDate, endDate);
+    const failedEvents = await this.getEventsByStatusAndPeriod('failed', startDate, endDate);
+    const forwardedMessages = await this.getForwardedMessagesInPeriod(startDate, endDate);
+
     // Get deferred and dismissed items
-    const deferredItems = this.getDeferredItems();
-    const dismissedItems = this.db.getDismissedItems(startDate, endDate);
+    const deferredItems = await this.getDeferredItems();
+    const dismissedItems = await this.db.getDismissedItems(startDate, endDate);
     
     // Count processed messages
-    const processedCount = this.getProcessedMessageCount(startDate, endDate);
+    const processedCount = await this.getProcessedMessageCount(startDate, endDate);
 
     // Build sections
     const sections: DigestSection[] = [];
@@ -50,7 +50,7 @@ export class DigestBuilder {
     let approvedPendingItems: DigestItem[] = [];
     
     if (totalEvents === 0) {
-      const approvedPending = this.getApprovedPendingApprovals(startDate, endDate);
+      const approvedPending = await this.getApprovedPendingApprovals(startDate, endDate);
       approvedPendingCount = approvedPending.length;
       
       if (approvedPending.length > 0) {
@@ -89,7 +89,7 @@ export class DigestBuilder {
       sections.push({
         title: `✅ Events Created (${createdEvents.length})`,
         type: 'created',
-        items: createdEvents.map(event => this.eventToDigestItem(event, '✓')),
+        items: await Promise.all(createdEvents.map(event => this.eventToDigestItem(event, '✓'))),
       });
     }
 
@@ -98,7 +98,7 @@ export class DigestBuilder {
       sections.push({
         title: `⚠️  Pending Review (${pendingEvents.length})`,
         type: 'pending_approval',
-        items: pendingEvents.map(event => this.eventToDigestItem(event, '⚠', baseUrl)),
+        items: await Promise.all(pendingEvents.map(event => this.eventToDigestItem(event, '⚠', baseUrl))),
       });
     }
 
@@ -125,7 +125,7 @@ export class DigestBuilder {
       sections.push({
         title: `❌ Errors (${failedEvents.length})`,
         type: 'errors',
-        items: failedEvents.map(event => this.eventToDigestItem(event)),
+        items: await Promise.all(failedEvents.map(event => this.eventToDigestItem(event))),
       });
     }
 
@@ -155,7 +155,7 @@ export class DigestBuilder {
       sections,
       stats,
       metadata: {
-        approvedPendingRawItems: totalEvents === 0 ? this.getApprovedPendingApprovals(startDate, endDate) : [],
+        approvedPendingRawItems: totalEvents === 0 ? await this.getApprovedPendingApprovals(startDate, endDate) : [],
       },
     };
   }
@@ -171,7 +171,7 @@ export class DigestBuilder {
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     // Get approved emails from pending_approvals for this pack
-    const approvedEmails = this.getApprovedEmailsByPack(packId, weekAgo.toISOString(), now.toISOString());
+    const approvedEmails = await this.getApprovedEmailsByPack(packId, weekAgo.toISOString(), now.toISOString());
 
     const sections: DigestSection[] = [];
     
@@ -262,23 +262,27 @@ export class DigestBuilder {
   /**
    * Get approved emails for a pack from pending_approvals table
    */
-  private getApprovedEmailsByPack(packId: string, startDate: string, endDate: string): any[] {
-    // Query the database directly via prepared statement
-    const stmt = (this.db as any).db.prepare(`
-      SELECT id, message_id, pack_id, relevance_score, from_email, from_name, 
-             subject, snippet, created_at
-      FROM pending_approvals
-      WHERE pack_id = ? AND approved = 1 AND action = 'approve'
-      AND created_at BETWEEN ? AND ?
-      ORDER BY created_at DESC
-    `);
-    return stmt.all(packId, startDate, endDate) || [];
+  private async getApprovedEmailsByPack(packId: string, startDate: string, endDate: string): Promise<any[]> {
+    try {
+      const result = await this.db.execute(`
+        SELECT id, message_id, pack_id, relevance_score, from_email, from_name,
+               subject, snippet, created_at
+        FROM pending_approvals
+        WHERE pack_id = ? AND approved = 1 AND action = 'approve'
+        AND created_at BETWEEN ? AND ?
+        ORDER BY created_at DESC
+      `, [packId, startDate, endDate]);
+      return result.rows as any[] || [];
+    } catch (error) {
+      console.error('Error fetching approved emails by pack:', error);
+      return [];
+    }
   }
 
   /**
    * Convert PersistedEvent to DigestItem
    */
-  private eventToDigestItem(event: PersistedEvent, symbol?: string, baseUrl?: string): DigestItem {
+  private async eventToDigestItem(event: PersistedEvent, symbol?: string, baseUrl?: string): Promise<DigestItem> {
     const eventDate = new Date(event.eventIntent.startDateTime);
     const formatted = this.formatDate(eventDate);
 
@@ -295,9 +299,9 @@ export class DigestBuilder {
 
     // Add approval token for pending events
     if (event.status === 'pending_approval' && baseUrl) {
-      const operation = this.db.getCalendarOperationByFingerprint(event.fingerprint);
+      const operation = await this.db.getCalendarOperationByFingerprint(event.fingerprint);
       if (operation) {
-        const token = this.db.getApprovalTokenByOperation(operation.id);
+        const token = await this.db.getApprovalTokenByOperation(operation.id);
         if (token) {
           item.approvalToken = token.id;
         }
@@ -311,9 +315,8 @@ export class DigestBuilder {
    * Convert ForwardedMessage to DigestItem
    */
   private forwardedMessageToDigestItem(msg: ForwardedMessage): DigestItem {
-    // Fetch original message details from processed_messages
-    const processed = this.db.getProcessedMessage(msg.sourceMessageId);
-    
+    // Note: We don't fetch processed message details to keep this sync
+    // The message_id substring is sufficient for the digest
     return {
       subject: `Message ${msg.sourceMessageId.substring(0, 8)}`,
       from: msg.packId,
@@ -326,8 +329,9 @@ export class DigestBuilder {
   /**
    * Get events by status within date range
    */
-  private getEventsByStatusAndPeriod(status: PersistedEvent['status'], startDate: string, endDate: string): PersistedEvent[] {
-    return this.db.getEventsByStatus(status).filter(event => {
+  private async getEventsByStatusAndPeriod(status: PersistedEvent['status'], startDate: string, endDate: string): Promise<PersistedEvent[]> {
+    const events = await this.db.getEventsByStatus(status);
+    return events.filter(event => {
       const created = new Date(event.createdAt);
       return created >= new Date(startDate) && created <= new Date(endDate);
     });
@@ -483,29 +487,27 @@ export class DigestBuilder {
   /**
    * Get approved pending approvals within date range
    */
-  private getApprovedPendingApprovals(startDate: string, endDate: string): any[] {
+  private async getApprovedPendingApprovals(startDate: string, endDate: string): Promise<any[]> {
     try {
-      const conn = this.db.getConnection();
-
       // Convert date-only strings to ISO datetime boundaries
       // startDate "2025-12-23" → "2025-12-23T00:00:00.000Z"
       // endDate "2025-12-30" → "2025-12-30T23:59:59.999Z"
-      const startISO = startDate.includes('T') 
-        ? startDate 
+      const startISO = startDate.includes('T')
+        ? startDate
         : `${startDate}T00:00:00.000Z`;
-      
+
       const endISO = endDate.includes('T')
         ? endDate
         : `${endDate}T23:59:59.999Z`;
 
-      const stmt = conn.prepare(`
-        SELECT * FROM pending_approvals 
-        WHERE pack_id = 'school' AND approved = 1 
+      const result = await this.db.execute(`
+        SELECT * FROM pending_approvals
+        WHERE pack_id = 'school' AND approved = 1
         AND (action IS NULL OR action != 'reject')
         AND created_at >= ? AND created_at <= ?
         ORDER BY created_at DESC
-      `);
-      return stmt.all(startISO, endISO);
+      `, [startISO, endISO]);
+      return result.rows as any[];
     } catch (error) {
       console.error('Error fetching approved pending approvals:', error);
       return [];
@@ -517,15 +519,15 @@ export class DigestBuilder {
   /**
    * Get forwarded messages in period
    */
-  private getForwardedMessagesInPeriod(startDate: string, endDate: string): ForwardedMessage[] {
+  private async getForwardedMessagesInPeriod(startDate: string, endDate: string): Promise<ForwardedMessage[]> {
     return this.db.getForwardedMessagesByDateRange(startDate, endDate);
   }
 
   /**
    * Get count of processed messages in period
    */
-  private getProcessedMessageCount(startDate: string, endDate: string): number {
-    const messages = this.db.getRecentProcessedMessages(1000); // TODO: Add date filter to query
+  private async getProcessedMessageCount(startDate: string, endDate: string): Promise<number> {
+    const messages = await this.db.getRecentProcessedMessages(1000); // TODO: Add date filter to query
     return messages.filter(msg => {
       const processed = new Date(msg.processedAt);
       return processed >= new Date(startDate) && processed <= new Date(endDate);
@@ -536,22 +538,21 @@ export class DigestBuilder {
    * Get deferred items (pending approvals with no action taken)
    * Shows items that need parent attention
    */
-  private getDeferredItems(): DigestItem[] {
+  private async getDeferredItems(): Promise<DigestItem[]> {
     try {
-      const conn = this.db.getConnection();
-      const stmt = conn.prepare(`
+      const result = await this.db.execute(`
         SELECT * FROM pending_approvals
         WHERE approved = 0 AND (action IS NULL OR action = '')
         ORDER BY created_at ASC
       `);
-      const items = stmt.all();
-      
+      const items = result.rows as any[];
+
       return items.map((item: any) => {
         const createdAt = new Date(item.created_at);
         const now = new Date();
         const daysPending = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
         const escalated = daysPending >= 7;
-        
+
         return {
           id: item.id,
           title: item.subject || 'No subject',
@@ -563,7 +564,7 @@ export class DigestBuilder {
           daysPending,
           escalated,
           symbol: escalated ? '🚨' : '?',
-          stateExplanation: escalated 
+          stateExplanation: escalated
             ? `URGENT: Pending for ${daysPending} days. Please dismiss or forward.`
             : `Pending for ${daysPending} day(s). Missing complete information to create calendar event.`,
           gmailLink: item.message_id ? generateGmailLink(item.message_id) || undefined : undefined,
@@ -1111,7 +1112,7 @@ export class DigestBuilder {
    * Generate upcoming summary for dashboard and email
    * Returns events for next N days + emails worth reading
    */
-  getUpcomingSummary(days: number = 14): {
+  async getUpcomingSummary(days: number = 14): Promise<{
     events: Array<{
       id: string;
       title: string;
@@ -1141,9 +1142,9 @@ export class DigestBuilder {
       emailsWorthReading: number;
       generatedAt: string;
     };
-  } {
+  }> {
     // Get upcoming events
-    const upcomingEvents = this.db.getUpcomingEvents(days);
+    const upcomingEvents = await this.db.getUpcomingEvents(days);
 
     // Format events for display
     const events = upcomingEvents.map((event) => {
@@ -1170,7 +1171,7 @@ export class DigestBuilder {
     });
 
     // Get emails worth reading
-    const worthReading = this.db.getEmailsWorthReading(undefined, 10);
+    const worthReading = await this.db.getEmailsWorthReading(undefined, 10);
 
     const emailsWorthReading = worthReading.map((email: any) => ({
       id: email.id,
@@ -1200,8 +1201,8 @@ export class DigestBuilder {
   /**
    * Generate plain text upcoming digest for email
    */
-  generateUpcomingDigestText(days: number = 14, baseUrl: string = 'http://localhost:5000'): string {
-    const { events, emailsWorthReading, summary } = this.getUpcomingSummary(days);
+  async generateUpcomingDigestText(days: number = 14, baseUrl: string = 'http://localhost:5000'): Promise<string> {
+    const { events, emailsWorthReading, summary } = await this.getUpcomingSummary(days);
 
     const now = new Date();
     const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
@@ -1274,8 +1275,8 @@ export class DigestBuilder {
   /**
    * Generate HTML upcoming digest for email
    */
-  generateUpcomingDigestHTML(days: number = 14, baseUrl: string = 'http://localhost:5000'): string {
-    const { events, emailsWorthReading, summary } = this.getUpcomingSummary(days);
+  async generateUpcomingDigestHTML(days: number = 14, baseUrl: string = 'http://localhost:5000'): Promise<string> {
+    const { events, emailsWorthReading, summary } = await this.getUpcomingSummary(days);
 
     const now = new Date();
     const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);

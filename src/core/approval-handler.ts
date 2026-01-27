@@ -28,7 +28,7 @@ export class ApprovalHandler {
    * Generate a new approval token for a calendar operation
    * Tokens expire in 2 hours
    */
-  generateToken(operationId: string): ApprovalToken {
+  async generateToken(operationId: string): Promise<ApprovalToken> {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2 hours
 
@@ -41,7 +41,7 @@ export class ApprovalHandler {
       used: false,
     };
 
-    this.db.insertApprovalToken(token);
+    await this.db.insertApprovalToken(token);
     this.logger.info('approval', 'token-generated', { tokenId: token.id, operationId });
 
     return token;
@@ -51,8 +51,8 @@ export class ApprovalHandler {
    * Validate an approval token
    * Returns error message if invalid, null if valid
    */
-  validateToken(tokenId: string): string | null {
-    const token = this.db.getApprovalToken(tokenId);
+  async validateToken(tokenId: string): Promise<string | null> {
+    const token = await this.db.getApprovalToken(tokenId);
     
     if (!token) {
       return 'Token not found';
@@ -77,7 +77,7 @@ export class ApprovalHandler {
    */
   async approveAndExecute(tokenId: string): Promise<ApprovalResult> {
     // Validate token
-    const validationError = this.validateToken(tokenId);
+    const validationError = await this.validateToken(tokenId);
     if (validationError) {
       this.logger.warn('approval', 'validation-failed', { tokenId, error: validationError });
       return {
@@ -87,17 +87,17 @@ export class ApprovalHandler {
       };
     }
 
-    const token = this.db.getApprovalToken(tokenId)!;
+    const token = (await this.db.getApprovalToken(tokenId))!;
     
     // Mark token as approved and used
-    this.db.updateApprovalToken(tokenId, {
+    await this.db.updateApprovalToken(tokenId, {
       approved: true,
       approvedAt: new Date().toISOString(),
       used: true,
     });
 
     // Get the calendar operation
-    const operation = this.db.getCalendarOperation(token.operationId);
+    const operation = await this.db.getCalendarOperation(token.operationId);
     if (!operation) {
       const error = 'Calendar operation not found';
       this.logger.error('approval', 'operation-not-found', { operationId: token.operationId });
@@ -109,7 +109,7 @@ export class ApprovalHandler {
     }
 
     // Get the associated event
-    const event = this.db.getEventByFingerprint(operation.eventFingerprint);
+    const event = await this.db.getEventByFingerprint(operation.eventFingerprint);
     if (!event) {
       const error = 'Event not found';
       this.logger.error('approval', 'event-not-found', { fingerprint: operation.eventFingerprint });
@@ -139,14 +139,14 @@ export class ApprovalHandler {
       }
 
       // Update operation status
-      this.db.updateCalendarOperation(operation.id, {
+      await this.db.updateCalendarOperation(operation.id, {
         status: 'executed',
         executedAt: new Date().toISOString(),
         calendarEventId,
       });
 
       // Update event status
-      this.db.updateEvent(event.fingerprint, {
+      await this.db.updateEvent(event.fingerprint, {
         status: 'created',
         calendarEventId,
       });
@@ -162,13 +162,13 @@ export class ApprovalHandler {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       
       // Update operation status
-      this.db.updateCalendarOperation(operation.id, {
+      await this.db.updateCalendarOperation(operation.id, {
         status: 'failed',
         error: errorMessage,
       });
 
       // Update event status
-      this.db.updateEvent(event.fingerprint, {
+      await this.db.updateEvent(event.fingerprint, {
         status: 'failed',
         error: errorMessage,
       });
@@ -203,7 +203,7 @@ export class ApprovalHandler {
    * Reject a pending operation
    */
   async reject(tokenId: string, reason?: string): Promise<ApprovalResult> {
-    const validationError = this.validateToken(tokenId);
+    const validationError = await this.validateToken(tokenId);
     if (validationError) {
       return {
         success: false,
@@ -212,26 +212,26 @@ export class ApprovalHandler {
       };
     }
 
-    const token = this.db.getApprovalToken(tokenId)!;
+    const token = (await this.db.getApprovalToken(tokenId))!;
     
     // Mark token as used (but not approved)
-    this.db.updateApprovalToken(tokenId, {
+    await this.db.updateApprovalToken(tokenId, {
       approved: false,
       used: true,
     });
 
     // Get the operation and mark as rejected
-    const operation = this.db.getCalendarOperation(token.operationId);
+    const operation = await this.db.getCalendarOperation(token.operationId);
     if (operation) {
-      this.db.updateCalendarOperation(operation.id, {
+      await this.db.updateCalendarOperation(operation.id, {
         status: 'rejected',
         error: reason || 'User rejected',
       });
 
       // Update associated event
-      const event = this.db.getEventByFingerprint(operation.eventFingerprint);
+      const event = await this.db.getEventByFingerprint(operation.eventFingerprint);
       if (event) {
-        this.db.updateEvent(event.fingerprint, {
+        await this.db.updateEvent(event.fingerprint, {
           status: 'flagged',
           error: reason || 'User rejected',
         });
@@ -249,8 +249,8 @@ export class ApprovalHandler {
   /**
    * Cleanup expired tokens (run periodically)
    */
-  cleanupExpiredTokens(): number {
-    const count = this.db.cleanupExpiredTokens();
+  async cleanupExpiredTokens(): Promise<number> {
+    const count = await this.db.cleanupExpiredTokens();
     if (count > 0) {
       this.logger.info('approval', 'cleanup-tokens', { count });
     }
@@ -260,7 +260,7 @@ export class ApprovalHandler {
   /**
    * Get approval token by operation ID
    */
-  getTokenForOperation(operationId: string): ApprovalToken | undefined {
-    return this.db.getApprovalTokenByOperation(operationId);
+  async getTokenForOperation(operationId: string): Promise<ApprovalToken | undefined> {
+    return await this.db.getApprovalTokenByOperation(operationId);
   }
 }

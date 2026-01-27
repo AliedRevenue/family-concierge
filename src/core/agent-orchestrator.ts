@@ -123,7 +123,7 @@ export class AgentOrchestrator {
     packConfig: any
   ): Promise<void> {
     // Check if already processed
-    const existing = this.db.getProcessedMessage(messageId);
+    const existing = await this.db.getProcessedMessage(messageId);
     if (existing) {
       this.logger.debug('AgentOrchestrator', 'message_already_processed', {
         messageId,
@@ -191,7 +191,7 @@ export class AgentOrchestrator {
       fingerprints,
     };
 
-    this.db.insertProcessedMessage(processedMessage);
+    await this.db.insertProcessedMessage(processedMessage);
 
     // Apply label if configured
     const source = packConfig.sources.find((s: any) => s.enabled);
@@ -212,7 +212,7 @@ export class AgentOrchestrator {
       const fromName = fromMatch?.[1]?.trim() || '';
       const fromEmail = fromMatch?.[2]?.trim() || fromHeader;
 
-      this.db.insertPendingApproval({
+      await this.db.insertPendingApproval({
           id: uuidv4(),
           messageId,
           packId,
@@ -268,7 +268,7 @@ export class AgentOrchestrator {
     if (!forwardingConfig || !forwardingConfig.enabled) return;
 
     // Check if already forwarded
-    const existingForward = this.db.getForwardedMessage(messageId);
+    const existingForward = await this.db.getForwardedMessage(messageId);
     if (existingForward) {
       this.logger.debug('AgentOrchestrator', 'message_already_forwarded', {
         messageId,
@@ -326,7 +326,7 @@ export class AgentOrchestrator {
       }
 
       forwardedMessage.success = true;
-      this.db.insertForwardedMessage(forwardedMessage);
+      await this.db.insertForwardedMessage(forwardedMessage);
 
       this.logger.info('AgentOrchestrator', 'email_forwarded', {
         messageId,
@@ -336,7 +336,7 @@ export class AgentOrchestrator {
     } catch (error) {
       forwardedMessage.success = false;
       forwardedMessage.error = (error as Error).message;
-      this.db.insertForwardedMessage(forwardedMessage);
+      await this.db.insertForwardedMessage(forwardedMessage);
 
       this.logger.error(
         'AgentOrchestrator',
@@ -438,7 +438,7 @@ export class AgentOrchestrator {
 
     // Check for duplicates within deduplication window
     const dateKey = event.startDateTime.split('T')[0];
-    const duplicates = this.db.findDuplicateEvents(
+    const duplicates = await this.db.findDuplicateEvents(
       fingerprint,
       dateKey,
       this.config.processing.deduplicationWindowDays
@@ -478,7 +478,7 @@ export class AgentOrchestrator {
       manuallyEdited: false,
     };
 
-    this.db.insertEvent(persistedEvent);
+    await this.db.insertEvent(persistedEvent);
 
     // Create calendar operation
     const operation: CalendarOperation = {
@@ -492,7 +492,7 @@ export class AgentOrchestrator {
       status: 'pending',
     };
 
-    this.db.insertCalendarOperation(operation);
+    await this.db.insertCalendarOperation(operation);
 
     // Execute immediately in autopilot mode (if high confidence)
     if (this.mode === 'autopilot' && shouldAutoCreate && !requiresReview) {
@@ -528,14 +528,14 @@ export class AgentOrchestrator {
       );
 
       // Update operation
-      this.db.updateCalendarOperation(operation.id, {
+      await this.db.updateCalendarOperation(operation.id, {
         status: 'executed',
         executedAt: new Date().toISOString(),
         calendarEventId: calendarEvent.id!,
       });
 
       // Update event
-      this.db.updateEvent(operation.eventFingerprint, {
+      await this.db.updateEvent(operation.eventFingerprint, {
         status: 'created',
         calendarEventId: calendarEvent.id!,
         lastSyncedAt: new Date().toISOString(),
@@ -553,12 +553,12 @@ export class AgentOrchestrator {
         error as Error
       );
 
-      this.db.updateCalendarOperation(operation.id, {
+      await this.db.updateCalendarOperation(operation.id, {
         status: 'failed',
         error: (error as Error).message,
       });
 
-      this.db.updateEvent(operation.eventFingerprint, {
+      await this.db.updateEvent(operation.eventFingerprint, {
         status: 'failed',
         error: (error as Error).message,
       });
@@ -632,6 +632,6 @@ export class AgentOrchestrator {
       resolved: false,
     };
 
-    this.db.insertException(exception);
+    await this.db.insertException(exception);
   }
 }

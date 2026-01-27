@@ -40,7 +40,7 @@ export class AISummaryGenerator {
   async generateObligationsSummary(items: any[], packId?: string): Promise<SummaryResult> {
     // Check cache first (use pack-specific cache key if packId provided)
     const cacheKey = packId ? `obligations_${packId}` : 'obligations';
-    const cached = this.db.getCachedSummary(cacheKey);
+    const cached = await this.db.getCachedSummary(cacheKey);
     if (cached) {
       return { ...cached, fromCache: true };
     }
@@ -92,7 +92,7 @@ Generate the summary:`;
       };
 
       // Cache the result (use pack-specific cache key)
-      this.db.saveSummaryCache(cacheKey, summary, items.map(i => i.id));
+      await this.db.saveSummaryCache(cacheKey, summary, items.map(i => i.id));
 
       return result;
     } catch (error) {
@@ -109,7 +109,7 @@ Generate the summary:`;
   async generateAnnouncementsSummary(items: any[], packId?: string): Promise<SummaryResult> {
     // Check cache first (use pack-specific cache key if packId provided)
     const cacheKey = packId ? `announcements_${packId}` : 'announcements';
-    const cached = this.db.getCachedSummary(cacheKey);
+    const cached = await this.db.getCachedSummary(cacheKey);
     if (cached) {
       return { ...cached, fromCache: true };
     }
@@ -162,7 +162,7 @@ Generate the summary:`;
       };
 
       // Cache the result (use pack-specific cache key)
-      this.db.saveSummaryCache(cacheKey, summary, items.map(i => i.id));
+      await this.db.saveSummaryCache(cacheKey, summary, items.map(i => i.id));
 
       return result;
     } catch (error) {
@@ -176,7 +176,7 @@ Generate the summary:`;
    */
   async generateCatchupSummary(items: any[]): Promise<SummaryResult> {
     // Check cache first
-    const cached = this.db.getCachedSummary('catchup');
+    const cached = await this.db.getCachedSummary('catchup');
     if (cached) {
       return { ...cached, fromCache: true };
     }
@@ -227,7 +227,7 @@ Generate the summary:`;
       };
 
       // Cache the result
-      this.db.saveSummaryCache('catchup', summary, items.map(i => i.id));
+      await this.db.saveSummaryCache('catchup', summary, items.map(i => i.id));
 
       return result;
     } catch (error) {
@@ -241,7 +241,7 @@ Generate the summary:`;
    */
   async generateTasksSummary(items: any[]): Promise<SummaryResult> {
     // Check cache first
-    const cached = this.db.getCachedSummary('tasks');
+    const cached = await this.db.getCachedSummary('tasks');
     if (cached) {
       return { ...cached, fromCache: true };
     }
@@ -293,7 +293,7 @@ Generate the summary:`;
       };
 
       // Cache the result
-      this.db.saveSummaryCache('tasks', summary, items.map(i => i.id));
+      await this.db.saveSummaryCache('tasks', summary, items.map(i => i.id));
 
       return result;
     } catch (error) {
@@ -307,7 +307,7 @@ Generate the summary:`;
    */
   async generateUpdatesSummary(items: any[]): Promise<SummaryResult> {
     // Check cache first
-    const cached = this.db.getCachedSummary('updates');
+    const cached = await this.db.getCachedSummary('updates');
     if (cached) {
       return { ...cached, fromCache: true };
     }
@@ -361,7 +361,7 @@ Generate the summary:`;
       };
 
       // Cache the result
-      this.db.saveSummaryCache('updates', summary, items.map(i => i.id));
+      await this.db.saveSummaryCache('updates', summary, items.map(i => i.id));
 
       return result;
     } catch (error) {
