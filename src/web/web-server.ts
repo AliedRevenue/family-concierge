@@ -600,7 +600,7 @@ export class WebServer {
     // PUT /api/recipients/:email - Update recipient preferences
     this.app.put('/api/recipients/:email', (req: Request, res: Response) => {
       try {
-        const { email } = req.params;
+        const email = getParam(req.params.email);
         const { name, receiveDigests, receiveForwarding, receiveErrors, receiveApprovals } = req.body;
 
         const preferences: any = {};
@@ -621,7 +621,7 @@ export class WebServer {
     // DELETE /api/recipients/:email - Delete recipient
     this.app.delete('/api/recipients/:email', (req: Request, res: Response) => {
       try {
-        const { email } = req.params;
+        const email = getParam(req.params.email);
         this.db.deleteRecipient(email);
         res.json({ success: true, email });
       } catch (error) {
