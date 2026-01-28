@@ -94,7 +94,7 @@ const MIGRATIONS = [
       -- Pending approvals (complete with all columns)
       CREATE TABLE IF NOT EXISTS pending_approvals (
         id TEXT PRIMARY KEY,
-        message_id TEXT NOT NULL,
+        message_id TEXT NOT NULL UNIQUE,
         pack_id TEXT NOT NULL,
         relevance_score REAL,
         subject TEXT,
@@ -230,6 +230,23 @@ const MIGRATIONS = [
     sql: `
       -- Add obligation_time column if it doesn't exist
       ALTER TABLE pending_approvals ADD COLUMN obligation_time TEXT;
+    `
+  },
+  {
+    version: 3,
+    name: 'dedupe_pending_approvals',
+    sql: `
+      -- Delete duplicate pending_approvals, keeping only the newest record per message_id
+      DELETE FROM pending_approvals
+      WHERE id NOT IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (PARTITION BY message_id ORDER BY created_at DESC) as rn
+          FROM pending_approvals
+        ) WHERE rn = 1
+      );
+
+      -- Create unique index on message_id to prevent future duplicates
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approvals_message_id ON pending_approvals(message_id);
     `
   }
 ];
