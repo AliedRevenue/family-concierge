@@ -605,6 +605,66 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
           padding: 24px 12px;
         }
 
+        /* Dismiss Button Styles */
+        .item-dismiss-btn {
+          background: transparent;
+          border: 1px solid rgba(220, 38, 38, 0.3);
+          color: rgba(220, 38, 38, 0.7);
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 18px;
+          font-weight: bold;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s;
+          flex-shrink: 0;
+        }
+
+        .item-dismiss-btn:hover {
+          background: rgba(220, 38, 38, 0.1);
+          border-color: rgba(220, 38, 38, 0.5);
+          color: #dc2626;
+        }
+
+        .item-dismiss-btn-small {
+          background: transparent;
+          border: 1px solid rgba(220, 38, 38, 0.3);
+          color: rgba(220, 38, 38, 0.6);
+          width: 24px;
+          height: 24px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: bold;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s;
+          flex-shrink: 0;
+        }
+
+        .item-dismiss-btn-small:hover {
+          background: rgba(220, 38, 38, 0.1);
+          border-color: rgba(220, 38, 38, 0.5);
+          color: #dc2626;
+        }
+
+        .school-bullet-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-left: 12px;
+        }
+
+        .activity-entry-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
         /* School Card (in top row) */
         .school-card {
           background: linear-gradient(180deg, #1e293b 0%, #253348 100%);
@@ -2043,12 +2103,12 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
               const personTag = item.person && item.person !== 'Family/Shared' ? item.person : '';
 
               return \`
-                <div class="obligation-item" onclick="viewEmail('\${item.id}')">
+                <div class="obligation-item">
                   <div class="obligation-date-badge">
                     <div class="month">\${month}</div>
                     <div class="day">\${day}</div>
                   </div>
-                  <div class="obligation-details">
+                  <div class="obligation-details" onclick="viewEmail('\${item.id}')" style="cursor: pointer;">
                     <div class="obligation-title">\${title}</div>
                     <div class="obligation-meta">
                       \${item.fromName || 'From ' + source}
@@ -2056,6 +2116,7 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
                       \${personTag ? \`<span class="obligation-source" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">\${personTag}</span>\` : ''}
                     </div>
                   </div>
+                  <button class="item-dismiss-btn" onclick="event.stopPropagation(); openDismissModal('\${item.id}')" title="Dismiss">×</button>
                 </div>
               \`;
             }).join('');
@@ -2133,15 +2194,16 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
               const time = event.startTime || (hasDate ? 'All day' : 'Recent');
 
               return \`
-                <div class="upcoming-event-item" onclick="viewEmail('\${event.id}')" style="cursor: pointer;">
+                <div class="upcoming-event-item">
                   \${dateContent}
-                  <div class="event-details">
+                  <div class="event-details" onclick="viewEmail('\${event.id}')" style="cursor: pointer; flex: 1;">
                     <div class="event-title">\${event.eventTitle || event.subject || 'Update'}</div>
                     <div class="event-meta">
                       <span class="event-time">\${time}</span>
                       \${event.person ? \`<span class="event-person-tag">\${event.person}</span>\` : ''}
                     </div>
                   </div>
+                  <button class="item-dismiss-btn" onclick="event.stopPropagation(); openDismissModal('\${event.id}')" title="Dismiss">×</button>
                 </div>
               \`;
             }).join('');
@@ -2208,11 +2270,14 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
               const title = item.eventTitle || item.subject || 'School update';
 
               return \`
-                <li class="school-bullet-item" onclick="viewEmail('\${item.id}')" style="cursor: pointer;">
-                  <span class="school-bullet-text">
+                <li class="school-bullet-item">
+                  <span class="school-bullet-text" onclick="viewEmail('\${item.id}')" style="cursor: pointer;">
                     \${dateStr ? \`<span class="date-highlight">\${dateStr}</span>\` : ''}\${title}\${personStr}
                   </span>
-                  <button class="view-email-btn" onclick="event.stopPropagation(); viewEmail('\${item.id}')">View</button>
+                  <div class="school-bullet-actions">
+                    <button class="view-email-btn" onclick="event.stopPropagation(); viewEmail('\${item.id}')">View</button>
+                    <button class="item-dismiss-btn-small" onclick="event.stopPropagation(); openDismissModal('\${item.id}')" title="Dismiss">×</button>
+                  </div>
                 </li>
               \`;
             }).join('');
@@ -2294,7 +2359,10 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
               : '';
             return \`
               <div class="activity-entry">
-                \${dateStr ? \`<div class="activity-entry-date">\${dateStr}</div>\` : ''}
+                <div class="activity-entry-header">
+                  \${dateStr ? \`<div class="activity-entry-date">\${dateStr}</div>\` : ''}
+                  <button class="item-dismiss-btn-small" onclick="event.stopPropagation(); openDismissModal('\${item.id}')" title="Dismiss">×</button>
+                </div>
                 <div class="activity-entry-title">\${item.eventTitle || item.subject || 'Activity'}</div>
                 \${item.person ? \`<div class="activity-entry-person">\${item.person}</div>\` : ''}
                 <span class="activity-view-link" onclick="viewEmail('\${item.id}')">View email →</span>

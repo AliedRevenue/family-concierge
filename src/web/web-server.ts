@@ -950,9 +950,10 @@ export class WebServer {
     this.app.get('/api/dashboard/announcements', async (req: Request, res: Response) => {
       try {
         const packId = req.query.packId as string | undefined;
+        const person = req.query.person as string | undefined;
         const _includeRead = req.query.includeRead === 'true';
         // Use getUpdatesItems which includes announcements
-        const items = await this.db.getUpdatesItems(packId);
+        const items = await this.db.getUpdatesItems(packId, person);
 
         // Format items for display
         const formatted = items.map((item: any) => ({
