@@ -339,9 +339,18 @@ export class WebServer {
     // Config API: Get current config
     this.app.get('/api/config', (_req: Request, res: Response) => {
       try {
-        // Load from agent-config.yaml
-        const _config = require('../../config/agent-config');
-        res.json(_config);
+        // Return the config passed to WebServer constructor
+        if (this.agentConfig) {
+          res.json(this.agentConfig);
+        } else {
+          // Return minimal default config
+          res.json({
+            version: '1.0.0',
+            packs: [],
+            calendar: { calendarId: 'primary', timezone: 'America/Los_Angeles' },
+            family: { members: [] },
+          });
+        }
       } catch (error) {
         res.status(500).json({ error: 'Failed to load configuration' });
       }

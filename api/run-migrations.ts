@@ -96,6 +96,7 @@ const MIGRATIONS = [
         id TEXT PRIMARY KEY,
         message_id TEXT NOT NULL,
         pack_id TEXT NOT NULL,
+        relevance_score REAL,
         subject TEXT,
         from_name TEXT,
         from_email TEXT,

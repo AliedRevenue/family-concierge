@@ -3,14 +3,31 @@
   "buildCommand": "npm run build",
   "outputDirectory": "public",
   "functions": {
+    "api/discover.ts": {
+      "maxDuration": 300
+    },
     "api/*.ts": {
       "maxDuration": 30
     }
   },
   "rewrites": [
     {
+      "source": "/api/discover",
+      "destination": "/api/discover"
+    },
+    {
       "source": "/(.*)",
       "destination": "/api/index"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/discover?packId=school",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/discover?packId=activities",
+      "schedule": "0 7 * * *"
     }
   ],
   "env": {

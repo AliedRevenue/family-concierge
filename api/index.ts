@@ -25,15 +25,15 @@ async function initialize() {
   const { DatabaseClient } = await import('../src/database/client.js');
   db = new DatabaseClient(dbUrl, dbAuthToken);
 
-  // Load configuration
+  // Load configuration - use embedded config for serverless
   let config;
-  const { ConfigLoader } = await import('../src/core/config-loader.js');
   try {
-    const configPath = process.env.CONFIG_PATH || './config/agent-config.yaml';
-    config = ConfigLoader.load(configPath);
-    console.log('📋 Config loaded from file');
+    const { embeddedConfig } = await import('../config/agent-config-embedded.js');
+    config = embeddedConfig;
+    console.log('📋 Config loaded from embedded module');
   } catch (error) {
-    console.warn('⚠️ Using default config');
+    console.warn('⚠️ Using default config:', error);
+    const { ConfigLoader } = await import('../src/core/config-loader.js');
     config = ConfigLoader.createDefault();
   }
 
