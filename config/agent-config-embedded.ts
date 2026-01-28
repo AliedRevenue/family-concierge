@@ -20,13 +20,19 @@ export const embeddedConfig: AgentConfig = {
             type: "email",
             fromDomains: [
               "waterfordschool.org",
+              "*waterford*.org",
+              "*waterford*.com",
               "mail1.veracross.com",
               "mail2.veracross.com",
-              "mail3.veracross.com"
+              "mail3.veracross.com",
+              "*veracross.com"
             ],
             keywords: [
               "Colin",
               "Henry",
+              "Class II",
+              "Second Grade",
+              "Kindergarten",
               "Colin Fitzgerald",
               "Henry Fitzgerald",
               "early release",
