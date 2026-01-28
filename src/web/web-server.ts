@@ -52,7 +52,7 @@ export class WebServer {
   constructor(
     db: DatabaseClient,
     digestBuilder: DigestBuilder,
-    emailSender: EmailSender,
+    emailSender?: EmailSender,
     port: number = 5000,
     gmail?: GmailConnector,
     agentConfig?: AgentConfig,
@@ -62,7 +62,7 @@ export class WebServer {
     this.port = port;
     this.db = db;
     this.digestBuilder = digestBuilder;
-    this.emailSender = emailSender;
+    this.emailSender = emailSender!; // May be undefined in serverless mode
     this.gmail = gmail;
     this.agentConfig = agentConfig;
 
@@ -4369,5 +4369,12 @@ export class WebServer {
         resolve();
       });
     });
+  }
+
+  /**
+   * Get the Express app instance (for serverless deployment)
+   */
+  public getApp(): express.Application {
+    return this.app;
   }
 }
