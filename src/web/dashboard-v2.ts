@@ -479,6 +479,132 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
           box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
         }
 
+        /* Obligations Section (Full Width) */
+        .obligations-section {
+          margin-bottom: 24px;
+        }
+
+        .obligations-card {
+          background: linear-gradient(180deg, #1e293b 0%, #253348 100%);
+          border-radius: 16px;
+          border: 1px solid #3d4f6a;
+          overflow: hidden;
+        }
+
+        .obligations-header {
+          padding: 18px 20px;
+          border-bottom: 1px solid #3d4f6a;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+
+        .obligations-title {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .obligations-title span.icon {
+          font-size: 1.5rem;
+        }
+
+        .obligations-title h3 {
+          font-weight: 700;
+          font-size: 24px;
+          color: white;
+          margin: 0;
+        }
+
+        .obligations-subtitle {
+          font-size: 16px;
+          color: #94a3b8;
+          margin-top: 2px;
+        }
+
+        .obligations-body {
+          padding: 16px 20px;
+          max-height: 300px;
+          overflow-y: auto;
+        }
+
+        .obligation-item {
+          display: flex;
+          align-items: flex-start;
+          gap: 14px;
+          padding: 14px;
+          background: rgba(251, 191, 36, 0.05);
+          border-radius: 12px;
+          margin-bottom: 12px;
+          border: 1px solid rgba(251, 191, 36, 0.15);
+          transition: all 0.2s;
+          cursor: pointer;
+        }
+
+        .obligation-item:last-child {
+          margin-bottom: 0;
+        }
+
+        .obligation-item:hover {
+          background: rgba(251, 191, 36, 0.1);
+          border-color: rgba(251, 191, 36, 0.3);
+        }
+
+        .obligation-date-badge {
+          background: linear-gradient(135deg, #b45309, #f59e0b);
+          border-radius: 10px;
+          padding: 8px 12px;
+          text-align: center;
+          min-width: 54px;
+        }
+
+        .obligation-date-badge .month {
+          font-size: 11px;
+          text-transform: uppercase;
+          color: rgba(255,255,255,0.9);
+          letter-spacing: 0.5px;
+        }
+
+        .obligation-date-badge .day {
+          font-size: 20px;
+          font-weight: 700;
+          color: white;
+          line-height: 1.2;
+        }
+
+        .obligation-details {
+          flex: 1;
+        }
+
+        .obligation-title {
+          font-size: 20px;
+          font-weight: 600;
+          color: #fbbf24;
+          margin-bottom: 4px;
+        }
+
+        .obligation-meta {
+          font-size: 16px;
+          color: #94a3b8;
+        }
+
+        .obligation-source {
+          display: inline-block;
+          background: rgba(139, 92, 246, 0.2);
+          color: #a78bfa;
+          font-size: 12px;
+          padding: 2px 8px;
+          border-radius: 10px;
+          margin-left: 8px;
+        }
+
+        .no-obligations {
+          color: #10b981;
+          font-size: 16px;
+          text-align: center;
+          padding: 24px 12px;
+        }
+
         /* School Card (in top row) */
         .school-card {
           background: linear-gradient(180deg, #1e293b 0%, #253348 100%);
@@ -1631,6 +1757,25 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
           </div>
         </div>
 
+        <!-- Upcoming Obligations (Full Width - Top Priority) -->
+        <div class="obligations-section">
+          <div class="obligations-card">
+            <div class="obligations-header">
+              <div class="obligations-title">
+                <span class="icon">📋</span>
+                <div>
+                  <h3>Upcoming Obligations</h3>
+                  <span class="obligations-subtitle">Action required from school & activities</span>
+                </div>
+              </div>
+              <span class="life-area-count" id="obligations-count">0</span>
+            </div>
+            <div class="obligations-body" id="obligationsBody">
+              <div class="loading">Loading obligations...</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Top Row: Upcoming Events + What's Happening at School -->
         <div class="top-row">
           <!-- Upcoming Events Card -->
@@ -1843,12 +1988,82 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
           const personParam = currentChild === 'all' ? '' : \`?person=\${encodeURIComponent(currentChild)}\`;
 
           await Promise.all([
+            loadObligations(personParam),
             loadUpcomingEvents(personParam),
             loadSchoolBullets(personParam),
             loadActivities(personParam),
             loadOpportunities(personParam),
             loadTasks(personParam)
           ]);
+        }
+
+        // Load Obligations - only obligations (item_type='obligation') from both school and activities
+        async function loadObligations(personParam = '') {
+          try {
+            const personSuffix = personParam ? '&' + personParam.substring(1) : '';
+
+            // Fetch obligations from both packs
+            const [schoolRes, activitiesRes] = await Promise.all([
+              fetch(\`/api/dashboard/obligations?packId=school\${personSuffix}\`),
+              fetch(\`/api/dashboard/obligations?packId=activities\${personSuffix}\`)
+            ]);
+            const schoolData = await schoolRes.json();
+            const activitiesData = await activitiesRes.json();
+
+            // Combine all obligations
+            const allObligations = [...(schoolData.items || []), ...(activitiesData.items || [])];
+
+            const container = document.getElementById('obligationsBody');
+            document.getElementById('obligations-count').textContent = allObligations.length;
+
+            if (allObligations.length === 0) {
+              container.innerHTML = '<div class="no-obligations">All caught up! No action items right now.</div>';
+              return;
+            }
+
+            // Sort by date: items with obligation dates first, then by created date
+            const sortedObligations = allObligations.sort((a, b) => {
+              if (a.effectiveDate && b.effectiveDate) {
+                return new Date(a.effectiveDate) - new Date(b.effectiveDate);
+              }
+              if (a.effectiveDate) return -1;
+              if (b.effectiveDate) return 1;
+              return new Date(b.createdAt) - new Date(a.createdAt);
+            });
+
+            container.innerHTML = sortedObligations.map(item => {
+              // Use obligation date if exists, otherwise email sent date
+              const displayDate = item.effectiveDate || item.createdAt;
+              const dateObj = new Date(displayDate);
+              const month = dateObj.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+              const day = dateObj.getDate();
+
+              const title = item.eventTitle || item.subject || 'Action Required';
+              const source = item.packId === 'school' ? 'School' : 'Activities';
+              const personTag = item.person && item.person !== 'Family/Shared' ? item.person : '';
+
+              return \`
+                <div class="obligation-item" onclick="viewEmail('\${item.id}')">
+                  <div class="obligation-date-badge">
+                    <div class="month">\${month}</div>
+                    <div class="day">\${day}</div>
+                  </div>
+                  <div class="obligation-details">
+                    <div class="obligation-title">\${title}</div>
+                    <div class="obligation-meta">
+                      \${item.fromName || 'From ' + source}
+                      <span class="obligation-source">\${source}</span>
+                      \${personTag ? \`<span class="obligation-source" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">\${personTag}</span>\` : ''}
+                    </div>
+                  </div>
+                </div>
+              \`;
+            }).join('');
+          } catch (error) {
+            console.error('Error loading obligations:', error);
+            document.getElementById('obligationsBody').innerHTML =
+              '<div class="no-obligations">Error loading obligations</div>';
+          }
         }
 
         // Load Upcoming Events - combines obligations and announcements
@@ -1979,19 +2194,15 @@ export function generateDashboardV2HTML(familyMembers: { name: string; aliases?:
               summaryContainer.textContent = \`\${allItems.length} updates from school this week.\`;
             }
 
-            // Sort by date (newest first for items without effectiveDate)
+            // Sort by email sent date (createdAt) - newest first
             const sortedItems = allItems.sort((a, b) => {
-              if (a.effectiveDate && b.effectiveDate) {
-                return new Date(a.effectiveDate) - new Date(b.effectiveDate);
-              }
-              if (a.effectiveDate) return -1;
-              if (b.effectiveDate) return 1;
               return new Date(b.createdAt) - new Date(a.createdAt);
             });
 
             container.innerHTML = sortedItems.slice(0, 8).map(item => {
-              const dateStr = item.effectiveDate
-                ? new Date(item.effectiveDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+              // Use email sent date (createdAt) for "What's Happening at School", not the obligation date
+              const dateStr = item.createdAt
+                ? new Date(item.createdAt).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
                 : '';
               const personStr = item.person && item.person !== 'Family/Shared' ? \` • \${item.person}\` : '';
               const title = item.eventTitle || item.subject || 'School update';

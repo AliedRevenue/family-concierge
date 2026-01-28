@@ -49,3 +49,4 @@ coverage/
 # Config overrides (user-specific)
 config/user-*.yaml
 config/user-*.json
+.vercel
