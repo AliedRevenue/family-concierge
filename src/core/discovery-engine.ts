@@ -286,11 +286,13 @@ export class DiscoveryEngine {
             let classification: {
               itemType: 'obligation' | 'announcement';
               obligationDate: string | null;
+              obligationTime: string | null;
               confidence: number;
               reasoning: string;
             } = {
               itemType: 'announcement',
               obligationDate: null,
+              obligationTime: null,
               confidence: 0.5,
               reasoning: 'No AI classifier available',
             };
@@ -308,7 +310,8 @@ export class DiscoveryEngine {
                   bodyHtml: body.html,
                 });
                 const durClassify = Date.now() - tClassify;
-                console.log(`   [${msgNum}/${totalMsgs}] after AI classification (${durClassify}ms) → ${classification.itemType}${classification.obligationDate ? ` on ${classification.obligationDate}` : ''}`);
+                const timeStr = classification.obligationTime ? ` at ${classification.obligationTime}` : '';
+                console.log(`   [${msgNum}/${totalMsgs}] after AI classification (${durClassify}ms) → ${classification.itemType}${classification.obligationDate ? ` on ${classification.obligationDate}${timeStr}` : ''}`);
               } catch (classifyError) {
                 console.error(`   [${msgNum}/${totalMsgs}] AI classification error:`, classifyError);
               }
@@ -336,6 +339,7 @@ export class DiscoveryEngine {
               emailBodyHtml: body.html || '',
               itemType: classification.itemType,
               obligationDate: classification.obligationDate,
+              obligationTime: classification.obligationTime,
               classificationConfidence: classification.confidence,
               classificationReasoning: classification.reasoning,
             });

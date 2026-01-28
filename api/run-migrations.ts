@@ -121,6 +121,7 @@ const MIGRATIONS = [
         item_type TEXT DEFAULT 'unknown',
         -- AI classification (migration 015)
         obligation_date TEXT,
+        obligation_time TEXT,
         classification_confidence REAL,
         classification_reasoning TEXT,
         classified_at TEXT
@@ -221,6 +222,14 @@ const MIGRATIONS = [
         resolved INTEGER NOT NULL DEFAULT 0,
         resolved_at TEXT
       );
+    `
+  },
+  {
+    version: 2,
+    name: 'add_obligation_time',
+    sql: `
+      -- Add obligation_time column if it doesn't exist
+      ALTER TABLE pending_approvals ADD COLUMN obligation_time TEXT;
     `
   }
 ];

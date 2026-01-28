@@ -9,7 +9,8 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export interface ClassificationResult {
   itemType: 'obligation' | 'announcement';
-  obligationDate: string | null;  // ISO date string if there's a relevant future date
+  obligationDate: string | null;  // ISO date string (YYYY-MM-DD) if there's a relevant date
+  obligationTime: string | null;  // Time string (HH:MM) in 24hr format if a specific time is mentioned
   confidence: number;
   reasoning: string;
 }
@@ -52,15 +53,24 @@ CLASSIFY THIS EMAIL:
    - OBLIGATION: Requires parent/child ACTION or ATTENDANCE (concerts, lessons, deadlines, permission slips, appointments, events to attend, forms to submit, RSVPs needed, waivers to sign)
    - ANNOUNCEMENT: Informational only, no action required (newsletters, class updates, "what we learned this week")
 
-2. **Date Extraction**: ALWAYS extract any specific date mentioned for events, lessons, deadlines, etc.
-   - Look carefully at the subject line for dates like "@ Sat Jan 31, 2026" or "January 15th"
-   - Include the date even if it's in the past - we need it for categorization
-   - Return null ONLY if there is truly no date mentioned
+2. **Date Extraction**: Extract the MOST RELEVANT date for this email.
+   IMPORTANT RULES:
+   - If the email discusses PAST events AND mentions FUTURE events/dates, extract the FUTURE date (this is the actionable date)
+   - For calendar invitations (subject contains "@ Sat Jan 31" or "Invitation:"), extract that event's date
+   - For lesson reminders with "Start Time:", extract the lesson date
+   - For newsletters like "Week of January 26-30", extract the START date of the week
+   - Return null ONLY if there truly is no date mentioned
+
+3. **Time Extraction**: If a specific time is mentioned, extract it.
+   - Look for patterns like "2:30 PM", "9:00 AM", "12pm - 1pm", "Start Time: 4:00 PM"
+   - Calendar invitations often have times in the subject line
+   - Return null if it's an all-day event or no specific time is mentioned
 
 Respond in this exact JSON format:
 {
   "itemType": "obligation" or "announcement",
   "obligationDate": "YYYY-MM-DD" or null,
+  "obligationTime": "HH:MM" (24hr format) or null,
   "confidence": 0.0 to 1.0,
   "reasoning": "Brief explanation"
 }
@@ -89,6 +99,7 @@ Only output the JSON, nothing else.`;
       return {
         itemType: result.itemType === 'obligation' ? 'obligation' : 'announcement',
         obligationDate: this.validateDate(result.obligationDate, currentDate),
+        obligationTime: this.validateTime(result.obligationTime),
         confidence: typeof result.confidence === 'number' ? result.confidence : 0.7,
         reasoning: result.reasoning || 'No reasoning provided',
       };
@@ -169,10 +180,47 @@ Only output the JSON, nothing else.`;
     }
   }
 
+  private validateTime(timeStr: string | null): string | null {
+    if (!timeStr) return null;
+
+    try {
+      // Normalize various time formats to HH:MM
+      let normalized = timeStr.trim();
+
+      // Handle 12-hour format with AM/PM
+      const ampmMatch = normalized.match(/^(\d{1,2}):?(\d{2})?\s*(am|pm|AM|PM)$/i);
+      if (ampmMatch) {
+        let hours = parseInt(ampmMatch[1]);
+        const minutes = ampmMatch[2] ? parseInt(ampmMatch[2]) : 0;
+        const isPM = ampmMatch[3].toLowerCase() === 'pm';
+
+        if (isPM && hours < 12) hours += 12;
+        if (!isPM && hours === 12) hours = 0;
+
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+      }
+
+      // Handle 24-hour format
+      const h24Match = normalized.match(/^(\d{1,2}):(\d{2})$/);
+      if (h24Match) {
+        const hours = parseInt(h24Match[1]);
+        const minutes = parseInt(h24Match[2]);
+        if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+          return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+        }
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private defaultClassification(): ClassificationResult {
     return {
       itemType: 'announcement',
       obligationDate: null,
+      obligationTime: null,
       confidence: 0.5,
       reasoning: 'Default classification due to processing error',
     };

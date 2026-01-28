@@ -806,6 +806,7 @@ export class DatabaseClient {
     emailBodyHtml?: string;
     itemType?: 'obligation' | 'announcement';
     obligationDate?: string | null;
+    obligationTime?: string | null;
     classificationConfidence?: number;
     classificationReasoning?: string;
   }): Promise<void> {
@@ -816,8 +817,8 @@ export class DatabaseClient {
           from_email, from_name, subject, snippet, created_at, approved,
           primary_category, secondary_categories, category_scores, save_reasons,
           person, assignment_reason, email_body_text, email_body_html,
-          item_type, obligation_date, classification_confidence, classification_reasoning, classified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          item_type, obligation_date, obligation_time, classification_confidence, classification_reasoning, classified_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       args: [
         approval.id,
@@ -839,6 +840,7 @@ export class DatabaseClient {
         approval.emailBodyHtml || null,
         approval.itemType || 'unknown',
         approval.obligationDate || null,
+        approval.obligationTime || null,
         approval.classificationConfidence || null,
         approval.classificationReasoning || null,
         approval.itemType ? new Date().toISOString() : null
@@ -1846,6 +1848,7 @@ export class DatabaseClient {
         pa.created_at,
         pa.item_type,
         pa.obligation_date,
+        pa.obligation_time,
         pa.classification_reasoning,
         COALESCE(pa.email_body_html, pa.email_body_text) as email_body,
         e.event_intent,

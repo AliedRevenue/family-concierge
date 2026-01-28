@@ -93,6 +93,20 @@ export class WebServer {
     this.setupRoutes();
   }
 
+  /**
+   * Format a time string (HH:MM in 24hr) to a display format (e.g., "2:30 PM")
+   */
+  private formatTime(time: string): string {
+    try {
+      const [hours, minutes] = time.split(':').map(Number);
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const hour12 = hours % 12 || 12;
+      return `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+    } catch {
+      return time; // Return as-is if parsing fails
+    }
+  }
+
   private setupMiddleware() {
     // Parse JSON bodies
     this.app.use(express.json());
@@ -844,6 +858,7 @@ export class WebServer {
           person: item.person,
           eventTitle: item.event_title,
           effectiveDate: item.effective_date,
+          startTime: item.obligation_time ? this.formatTime(item.obligation_time) : null,
           timeGroup: item.time_group,
           createdAt: item.created_at,
           messageId: item.message_id,
