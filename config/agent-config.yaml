@@ -140,6 +140,16 @@ family:
   # Source-based assignment rules (checked before text-based matching)
   # When multiple kids are assigned, AI will try to refine using grade/name context
   sourceAssignments:
+    # School emails - assign to both, refine by grade context
+    - match:
+        fromDomain: "*waterford*"
+      assignTo: ["Colin", "Henry"]  # School emails - refine by Class II/Kindergarten mentions
+
+    - match:
+        fromDomain: "*veracross*"
+      assignTo: ["Colin", "Henry"]  # Veracross portal - refine by grade mentions
+
+    # Activities
     - match:
         fromDomain: "bigblueswimschool.com"
       assignTo: ["Colin", "Henry"]  # Both boys swim - AI will refine if possible

@@ -123,7 +123,31 @@ export const embeddedConfig: AgentConfig = {
         gradeAliases: ["Kindergarten", "Class K", "K", "Pre-1"]
       }
     ],
-    defaultAssignmentFallback: "Family/Shared"
+    defaultAssignmentFallback: "Family/Shared",
+    sourceAssignments: [
+      // School emails - assign to both, refine by grade context
+      {
+        match: { fromDomain: "*waterford*" },
+        assignTo: ["Colin", "Henry"]
+      },
+      {
+        match: { fromDomain: "*veracross*" },
+        assignTo: ["Colin", "Henry"]
+      },
+      // Activities
+      {
+        match: { fromDomain: "bigblueswimschool.com" },
+        assignTo: ["Colin", "Henry"]
+      },
+      {
+        match: { fromDomain: "mymusicstaff.com" },
+        assignTo: ["Colin", "Henry"]
+      },
+      {
+        match: { fromDomain: "*appassionata*" },
+        assignTo: ["Colin", "Henry"]
+      }
+    ]
   },
   externalCalendars: [
     {
