@@ -1390,6 +1390,81 @@ export class WebServer {
       }
     });
 
+    // Admin: Re-assign all items with updated person assignment rules
+    this.app.post('/api/admin/reassign', async (_req: Request, res: Response) => {
+      try {
+        console.log('🔄 Starting person re-assignment...');
+
+        // Import person assigner
+        const { createPersonAssignerFromConfig } = await import('../utils/person-assignment.js');
+
+        if (!this.agentConfig) {
+          res.status(500).json({ error: 'Agent config not available' });
+          return;
+        }
+
+        const personAssigner = createPersonAssignerFromConfig(this.agentConfig);
+
+        // Get all discovered items
+        const items = await this.db.execute(`
+          SELECT id, subject, snippet, from_email, from_name, body_text, assigned_to
+          FROM discovered_items
+        `);
+
+        let updated = 0;
+        let unchanged = 0;
+        const changes: Array<{ subject: string; from: string; to: string; reason: string }> = [];
+
+        for (const row of items.rows) {
+          const id = row.id as string;
+          const subject = (row.subject as string) || '';
+          const snippet = (row.snippet as string) || '';
+          const fromEmail = (row.from_email as string) || '';
+          const fromName = (row.from_name as string) || '';
+          const bodyText = (row.body_text as string) || '';
+          const currentAssignment = row.assigned_to as string;
+
+          const assignment = personAssigner.assign(
+            subject,
+            snippet.slice(0, 500),
+            fromEmail,
+            fromName,
+            bodyText.slice(0, 2000)
+          );
+
+          if (assignment.person !== currentAssignment) {
+            await this.db.execute(
+              `UPDATE discovered_items SET assigned_to = ? WHERE id = ?`,
+              [assignment.person, id]
+            );
+
+            changes.push({
+              subject: subject.substring(0, 50),
+              from: currentAssignment,
+              to: assignment.person,
+              reason: assignment.reason
+            });
+            updated++;
+          } else {
+            unchanged++;
+          }
+        }
+
+        console.log(`✅ Re-assignment complete: ${updated} updated, ${unchanged} unchanged`);
+
+        res.json({
+          success: true,
+          updated,
+          unchanged,
+          changes: changes.slice(0, 50), // Limit response size
+          totalChanges: changes.length
+        });
+      } catch (error) {
+        console.error('Error during re-assignment:', error);
+        res.status(500).json({ error: 'Failed to re-assign items', details: (error as Error).message });
+      }
+    });
+
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
       res.json({ status: 'ok', timestamp: new Date().toISOString(), chat: !!this.chatHandler });
